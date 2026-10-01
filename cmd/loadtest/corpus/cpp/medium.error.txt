@@ -1,0 +1,7 @@
+$ g++ -std=c++17 -Wall -g -o matrix matrix.cpp && ./matrix
+2 2 
+3 5 
+7 10 
+15 22 
+free(): double free detected in tcache 2
+Aborted (core dumped)

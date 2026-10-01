@@ -1,0 +1,18 @@
+$ python3 gradebook.py
+Traceback (most recent call last):
+  File "/home/student/lab5/gradebook.py", line 71, in <module>
+    print(book.report())
+          ^^^^^^^^^^^^^
+  File "/home/student/lab5/gradebook.py", line 49, in report
+    for position, student in enumerate(self.ranking(), start=1):
+                                       ^^^^^^^^^^^^^^
+  File "/home/student/lab5/gradebook.py", line 45, in ranking
+    return sorted(self.students.values(), key=lambda s: s.average(), reverse=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/student/lab5/gradebook.py", line 45, in <lambda>
+    return sorted(self.students.values(), key=lambda s: s.average(), reverse=True)
+                                                        ^^^^^^^^^^^
+  File "/home/student/lab5/gradebook.py", line 21, in average
+    return sum(self.grades) / len(self.grades)
+           ~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~
+ZeroDivisionError: division by zero

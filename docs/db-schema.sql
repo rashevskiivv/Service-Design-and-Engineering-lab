@@ -1,0 +1,3 @@
+-- Superseded. The source of truth for the SQLite schema is internal/store/schema.sql
+-- (embedded with //go:embed and applied at startup); it adds expires_at and the other
+-- DECISIONS D5 changes. This file is kept only so old links resolve; do not edit it.

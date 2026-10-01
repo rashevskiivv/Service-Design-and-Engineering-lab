@@ -1,0 +1,23 @@
+# Build context hygiene (security review #10): secrets, local state and
+# anything the build does not need stay out of the context and every layer.
+# Patterns are relative to the context root; **/ matches at any depth.
+.git
+.gitignore
+.dockerignore
+docs/
+.idea/
+bin/
+gateway
+loadtest
+loadtest-results/
+**/.env
+**/.env.*
+data
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/keys*.csv
+**/keys-slips*.md
+**/*.keys
+**/*.pem
+**/*.key

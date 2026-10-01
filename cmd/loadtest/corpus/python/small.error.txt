@@ -1,0 +1,12 @@
+$ python3 words.py
+Traceback (most recent call last):
+  File "/home/student/lab3/words.py", line 28, in <module>
+    for word, count in top_words(sample):
+                       ^^^^^^^^^^^^^^^^^
+  File "/home/student/lab3/words.py", line 21, in top_words
+    counts = word_counts(text)
+             ^^^^^^^^^^^^^^^^^
+  File "/home/student/lab3/words.py", line 15, in word_counts
+    counts[word] += 1
+    ~~~~~~^^^^^^
+KeyError: 'the'

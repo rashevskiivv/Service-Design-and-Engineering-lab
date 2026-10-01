@@ -1,0 +1,8 @@
+$ g++ -std=c++17 -Wall -o stack stack.cpp
+stack.cpp: In function 'void report(const Stack&)':
+stack.cpp:35:42: error: passing 'const Stack' as 'this' argument discards qualifiers [-fpermissive]
+   35 |     std::cout << "stack holds " << s.size() << " item(s)\n";
+      |                                    ~~~~~~^~
+stack.cpp:27:17: note:   in call to 'std::size_t Stack::size()'
+   27 |     std::size_t size() { return items_.size(); }
+      |                 ^~~~

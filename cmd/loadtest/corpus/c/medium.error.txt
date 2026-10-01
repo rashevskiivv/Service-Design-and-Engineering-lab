@@ -1,0 +1,40 @@
+$ gcc -g -Wall -fsanitize=address -o students students.c
+students.c: In function 'free_list':
+students.c:67:41: warning: pointer 'n' used after 'free' [-Wuse-after-free]
+   67 |     for (node_t *n = head; n != NULL; n = n->next) {
+      |                                       ~~^~~~~~~~~
+students.c:68:9: note: call to 'free' here
+   68 |         free(n);
+      |         ^~~~~~~
+$ ./students
+removed 1 student(s)
+   3  Russo         30.0
+  19  Esposito      22.0
+  42  Bianchi       27.5
+=================================================================
+==48213==ERROR: AddressSanitizer: heap-use-after-free on address 0x506000000170 at pc 0x55e99c62e870 bp 0x7ffc5db15e50 sp 0x7ffc5db15e40
+READ of size 8 at 0x506000000170 thread T0
+    #0 0x55e99c62e86f in free_list /home/student/lab5/students.c:67
+    #1 0x55e99c62ea94 in main /home/student/lab5/students.c:83
+    #2 0x7fea4402a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #3 0x7fea4402a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #4 0x55e99c62e2a4 in _start (/home/student/lab5/students+0x12a4) (BuildId: 0681e9a017af195e06a57b47f9d3e56294acf727)
+
+0x506000000170 is located 48 bytes inside of 56-byte region [0x506000000140,0x506000000178)
+freed by thread T0 here:
+    #0 0x7fea444fc4d8 in free ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:52
+    #1 0x55e99c62e84a in free_list /home/student/lab5/students.c:68
+    #2 0x55e99c62ea94 in main /home/student/lab5/students.c:83
+    #3 0x7fea4402a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #4 0x7fea4402a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #5 0x55e99c62e2a4 in _start (/home/student/lab5/students+0x12a4) (BuildId: 0681e9a017af195e06a57b47f9d3e56294acf727)
+
+previously allocated by thread T0 here:
+    #0 0x7fea444fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x55e99c62e38a in make_node /home/student/lab5/students.c:16
+    #2 0x55e99c62e9ee in main /home/student/lab5/students.c:78
+    #3 0x7fea4402a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #4 0x7fea4402a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #5 0x55e99c62e2a4 in _start (/home/student/lab5/students+0x12a4) (BuildId: 0681e9a017af195e06a57b47f9d3e56294acf727)
+
+SUMMARY: AddressSanitizer: heap-use-after-free /home/student/lab5/students.c:67 in free_list

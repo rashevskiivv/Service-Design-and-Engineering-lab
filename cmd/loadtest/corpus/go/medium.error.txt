@@ -1,0 +1,19 @@
+$ go run wordfreq.go -min 3 books/*.txt
+fatal error: concurrent map writes
+
+goroutine 21 [running]:
+internal/runtime/maps.fatal({0x4cb05b?, 0x5?})
+	/usr/local/go/src/runtime/panic.go:1058 +0x18
+main.countFile({0x7ffd28d93b10, 0x9}, {0x0?, 0x0?, 0x0?}, 0xc000118180, 0x0?)
+	/home/student/lab7/wordfreq.go:57 +0x245
+created by main.main in goroutine 1
+	/home/student/lab7/wordfreq.go:96 +0x1e5
+
+goroutine 1 [sync.WaitGroup.Wait]:
+sync.runtime_SemacquireWaitGroup(0xc00011c240?)
+	/usr/local/go/src/runtime/sema.go:110 +0x25
+sync.(*WaitGroup).Wait(0xc000120070?)
+	/usr/local/go/src/sync/waitgroup.go:118 +0x48
+main.main()
+	/home/student/lab7/wordfreq.go:98 +0x2f1
+exit status 2

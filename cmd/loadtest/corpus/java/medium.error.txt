@@ -1,0 +1,5 @@
+$ javac Library.java
+Library.java:33: error: incompatible types: possible lossy conversion from double to int
+            return book.dailyFee * days;
+                                 ^
+1 error

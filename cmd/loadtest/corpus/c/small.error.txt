@@ -1,0 +1,17 @@
+$ gcc -g -Wall -fsanitize=address -o names names.c && ./names
+=================================================================
+==48213==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x7fa46bf00030 at pc 0x7fa46e4f6260 bp 0x7ffe066bd680 sp 0x7ffe066bce28
+WRITE of size 11 at 0x7fa46bf00030 thread T0
+    #0 0x7fa46e4f625f in strcat ../../../../src/libsanitizer/asan/asan_interceptors.cpp:515
+    #1 0x563e0475a330 in format_name /home/student/lab2/names.c:10
+    #2 0x563e0475a490 in main /home/student/lab2/names.c:30
+    #3 0x7fa46e02a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #4 0x7fa46e02a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #5 0x563e0475a204 in _start (/home/student/lab2/names+0x1204) (BuildId: cf759bfa2217df27ab72b52678cdfa9073d3711f)
+
+Address 0x7fa46bf00030 is located in stack of thread T0 at offset 48 in frame
+    #0 0x563e0475a3e0 in main /home/student/lab2/names.c:25
+
+  This frame has 1 object(s):
+    [32, 48) 'full' (line 28) <== Memory access at offset 48 overflows this variable
+SUMMARY: AddressSanitizer: stack-buffer-overflow ../../../../src/libsanitizer/asan/asan_interceptors.cpp:515 in strcat

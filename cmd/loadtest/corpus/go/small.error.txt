@@ -1,0 +1,9 @@
+$ go run words.go
+panic: runtime error: index out of range [10] with length 10
+
+goroutine 1 [running]:
+main.reverseWords({0x4bd19e?, 0x40afe8?})
+	/home/student/lab4/words.go:14 +0xc7
+main.main()
+	/home/student/lab4/words.go:31 +0x25
+exit status 2

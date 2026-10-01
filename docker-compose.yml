@@ -1,0 +1,67 @@
+# Laptop mode: only the gateway runs in Docker. Ollama runs natively on the Mac
+# because containers on macOS cannot use the Metal GPU.
+#
+#   cp .env.laptop.example .env        # then set LGAI_ADMIN_TOKEN (openssl rand -base64 32)
+#   OLLAMA_NUM_PARALLEL=4 OLLAMA_CONTEXT_LENGTH=8192 OLLAMA_KEEP_ALIVE=-1 ollama serve
+#   docker compose up --build -d
+#   curl -s http://127.0.0.1:8080/readyz
+#
+# Ollama reachability: Docker Desktop for Mac forwards host.docker.internal to
+# the Mac itself, and reportedly to its loopback, so Ollama's default
+# 127.0.0.1:11434 should work without OLLAMA_HOST=0.0.0.0. Docker's docs do not
+# state this for loopback-bound services; check once with
+#   docker run --rm curlimages/curl -s http://host.docker.internal:11434/v1/models
+# If it fails, do NOT set OLLAMA_HOST=0.0.0.0 on shared Wi-Fi (it exposes an
+# unauthenticated Ollama to the whole network, security review #23); run the
+# gateway natively instead (README.md, section "Docker").
+name: local-generative-ai
+
+services:
+  gateway:
+    build: .
+    image: local-generative-ai:dev
+    env_file: .env
+    # These override .env (Compose: environment beats env_file). .env keeps the
+    # values for a native `go run`; the container needs its own.
+    environment:
+      LGAI_ADDR: ":8080"
+      # Admin listener on all container interfaces, but published on the Mac's
+      # loopback only (ports below). It starts only if LGAI_ADMIN_TOKEN is set.
+      LGAI_ADMIN_ADDR: ":8081"
+      LGAI_DB_PATH: /data/gateway.db
+      LGAI_UPSTREAM_BASE_URL: http://host.docker.internal:11434/v1
+    ports:
+      # Loopback only: never 0.0.0.0 on campus Wi-Fi (security #23).
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8081:8081"
+    # Needed on Linux (maps the name to the host's bridge IP); harmless on Docker Desktop.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - gateway-data:/data
+    # Hardening (security #22): read-only root filesystem, only /data and a
+    # small /tmp (SQLite temp files) are writable; no capabilities; no setuid.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+    cap_drop: [ALL]
+    security_opt:
+      - "no-new-privileges:true"
+    # distroless has no shell or curl: the image's own binary is the probe.
+    healthcheck:
+      test: ["CMD", "/gateway", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    # Longer than LGAI_SHUTDOWN_TIMEOUT (30s) so streams can drain on `docker compose down`.
+    stop_grace_period: 40s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  gateway-data:

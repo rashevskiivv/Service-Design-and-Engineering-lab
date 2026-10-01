@@ -1,0 +1,1166 @@
+openapi: 3.1.0
+info:
+  title: local-generative-ai gateway
+  version: 0.2.2
+  summary: OpenAI-compatible API gateway in front of a self-hosted open-weights coding model.
+  description: |
+    **Public listener** (`LGAI_ADDR`, default `127.0.0.1:8080`; containers set `:8080`):
+    * `POST /v1/chat/completions`, `GET /v1/models`: OpenAI-compatible. They work with the
+      official `openai` client by changing `base_url` and `api_key`.
+    * `POST /v1/tasks/{task}`: coding tasks (`explain`, `review`, `tests`, `fix`). They return
+      the same `chat.completion` / `chat.completion.chunk` shapes (ADR 0003).
+    * `GET /healthz`, `GET /readyz`: unauthenticated probes.
+
+    **Admin listener** (`LGAI_ADMIN_ADDR`, default `127.0.0.1:8081`): every `/admin/*` path.
+    It only starts when `LGAI_ADMIN_TOKEN` is set. The public listener has **no** `/admin`
+    routes: every `/admin/*` path there returns 404, unless `LGAI_ADMIN_ON_PUBLIC=true`
+    explicitly mounts them (the gateway logs a WARN at startup).
+
+    **Conventions**
+    * Keys are accepted only as `Authorization: Bearer lgai_…`; never in the query string,
+      a cookie or `X-API-Key`. A missing, malformed, unknown, revoked or expired key gets the
+      same 401.
+    * All errors use the OpenAI envelope `{"error":{"message","type","code","param"}}`,
+      including 404 for unknown routes and 405 for wrong methods (the only exceptions are
+      `net/http`'s own plain-text 400/431 for malformed request lines and oversized headers).
+    * Responses with 429 and 503 carry `Retry-After` (integer seconds). The `openai` Python
+      client honours `Retry-After` and by default retries 429/5xx twice.
+    * Every response carries `X-Request-ID`, `Cache-Control: no-store`,
+      `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none';
+      frame-ancestors 'none'` and `Referrer-Policy: no-referrer`. There are no CORS headers.
+    * An error response to a request that carried a body closes the connection.
+    * No prompt or completion content is stored or logged.
+  license:
+    name: MIT
+servers:
+  - url: http://127.0.0.1:8080
+    description: Public listener, local run
+  - url: https://{host}
+    description: Behind the TLS reverse proxy
+    variables:
+      host:
+        default: lgai.example.org
+security:
+  - apiKey: []
+tags:
+  - name: openai
+    description: OpenAI-compatible endpoints
+  - name: tasks
+    description: Language-aware coding task endpoints
+  - name: health
+    description: Liveness and readiness probes
+  - name: admin
+    description: Key management, usage and maintenance (admin listener, admin token)
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: healthz
+      summary: Liveness. The process is up. It never calls the upstream.
+      security: []
+      responses:
+        '200':
+          description: Alive
+          headers:
+            X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Health'}
+              example: {status: ok}
+
+  /readyz:
+    get:
+      tags: [health]
+      operationId: readyz
+      summary: Readiness. The upstream model server and the SQLite file answer.
+      description: |
+        Probes `LGAI_UPSTREAM_HEALTH_URL` if it is set, otherwise `GET {LGAI_UPSTREAM_BASE_URL}/models`,
+        with a 2 s timeout, and pings SQLite. The result is cached for 2 s and computed by one
+        caller at a time, so this unauthenticated endpoint cannot amplify load on the upstream.
+        The 503 body is generic: it never names hosts or ports.
+      security: []
+      responses:
+        '200':
+          description: Ready
+          headers:
+            X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Ready'}
+              example: {status: ready, upstream: ok, db: ok}
+        '503':
+          description: Not ready (upstream or database down)
+          headers:
+            X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+            Retry-After: {$ref: '#/components/headers/Retry-After'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example:
+                error: {message: not ready, type: server_error, code: upstream_unavailable, param: null}
+
+  /v1/models:
+    get:
+      tags: [openai]
+      operationId: listModels
+      summary: List the public model names (aliases from LGAI_MODELS).
+      description: |
+        Served from config. It does not call the upstream. The first entry is the default model.
+        This request is not rate limited, not recorded in usage, and keeps working in maintenance mode.
+      responses:
+        '200':
+          description: Model list
+          headers:
+            X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ModelList'}
+              example:
+                object: list
+                data:
+                  - {id: coder, object: model, created: 1790726400, owned_by: local-generative-ai}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /v1/chat/completions:
+    post:
+      tags: [openai]
+      operationId: createChatCompletion
+      summary: OpenAI-compatible chat completion (non-streaming or SSE streaming).
+      description: |
+        The key is checked, and the key's in-flight slot taken, **before** the body is read. The gateway
+        then validates the body against
+        a typed allowlist (security review §5) and **builds** the upstream request from the validated
+        values; raw client bytes are never forwarded.
+        * **Unknown fields** are dropped silently (SDK compatibility, e.g. `user`, `metadata`,
+          `store`, Ollama `keep_alive`). Refused with 400 `unsupported_parameter`:
+          `n` ≠ 1, `response_format` other than `text`/`json_object`, `tool_choice` `required` or an
+          object, any `chat_template_kwargs` key except `enable_thinking`, and non-text content parts.
+          `logprobs` and `top_logprobs` are dropped.
+        * **Model.** `model` is an alias from `LGAI_MODELS`; missing means the default model; unknown
+          returns 404 `model_not_found`.
+        * **Token limit.** `max_tokens` and `max_completion_tokens` are merged (the smaller wins);
+          missing means `LGAI_CHAT_DEFAULT_MAX_TOKENS`. The value is clamped to `LGAI_MAX_TOKENS_CAP`,
+          and for non-streaming requests also to `LGAI_NONSTREAM_MAX_TOKENS`: use `stream: true` for
+          long answers. Only `max_tokens` is sent upstream.
+        * **Input cap.** Message text plus serialized `tools` must fit in `LGAI_CHAT_MAX_INPUT_BYTES`
+          (default 16384), else 413. At most 128 messages; JSON nesting at most 32 levels.
+        * **Per-model defaults.** Fields from `LGAI_MODEL_DEFAULTS` (e.g. `reasoning_effort: low`) are
+          added when the client did not set them.
+        * **Streaming usage.** With `stream: true` the gateway always asks the upstream for usage. The
+          final usage-only chunk is forwarded only if the client set `stream_options.include_usage: true`.
+
+        **Streaming errors.** If the upstream fails after the stream has started (error event, broken
+        stream, or no data for `LGAI_UPSTREAM_IDLE_TIMEOUT`), the gateway sends one generic event
+        `data: {"error":{…,"code":"upstream_error"}}` and closes the stream without `[DONE]`. The
+        `openai` client raises `APIError` on such an event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChatCompletionRequest'}
+            examples:
+              nonStreaming:
+                summary: Non-streaming
+                value:
+                  model: coder
+                  messages:
+                    - {role: user, content: 'Write a Go function that reverses a string with Unicode support.'}
+                  max_tokens: 256
+              streaming:
+                summary: Streaming
+                value:
+                  model: coder
+                  stream: true
+                  messages:
+                    - {role: system, content: You are a helpful coding assistant.}
+                    - {role: user, content: 'Explain Python list comprehensions in 3 sentences.'}
+      responses:
+        '200':
+          description: |
+            `application/json` when `stream` is false or absent. `text/event-stream` when `stream` is
+            true: a sequence of `data: <ChatCompletionChunk JSON>\n\n` events ending with `data: [DONE]\n\n`.
+            Only `Content-Type` is copied from the upstream response.
+          headers:
+            X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChatCompletion'}
+              example:
+                id: chatcmpl-8f3a
+                object: chat.completion
+                created: 1790761167
+                model: gpt-oss:20b
+                choices:
+                  - index: 0
+                    message: {role: assistant, content: "```go\nfunc Reverse(s string) string { ... }\n```"}
+                    finish_reason: stop
+                usage: {prompt_tokens: 31, completion_tokens: 88, total_tokens: 119}
+            text/event-stream:
+              schema:
+                type: string
+                description: 'SSE stream of ChatCompletionChunk objects (see #/components/schemas/ChatCompletionChunk).'
+              example: |
+                data: {"id":"chatcmpl-8f3a","object":"chat.completion.chunk","created":1790761167,"model":"gpt-oss:20b","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+                data: {"id":"chatcmpl-8f3a","object":"chat.completion.chunk","created":1790761167,"model":"gpt-oss:20b","choices":[{"index":0,"delta":{"content":"List"},"finish_reason":null}]}
+
+                data: {"id":"chatcmpl-8f3a","object":"chat.completion.chunk","created":1790761167,"model":"gpt-oss:20b","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+                data: [DONE]
+
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/ModelNotFound'}
+        '405': {$ref: '#/components/responses/MethodNotAllowed'}
+        '408': {$ref: '#/components/responses/RequestTimeout'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '502': {$ref: '#/components/responses/BadGateway'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+        '504': {$ref: '#/components/responses/GatewayTimeout'}
+
+  /v1/tasks/{task}:
+    post:
+      tags: [tasks]
+      operationId: runTask
+      summary: Run a coding task (explain, review, tests, fix) with a language-aware prompt.
+      description: |
+        The gateway builds a fixed system prompt (task + language; no client text) and a user message
+        (the code in a fence one backtick longer than any run inside it, then the error output for
+        `fix`, the test framework for `tests`, and the student's instructions), then sends the result
+        as a chat completion. The response is relayed unchanged: `chat.completion` or an SSE stream of
+        `chat.completion.chunk` (ADR 0003). The answer is Markdown in `choices[0].message.content`.
+
+        The upstream body contains exactly `model`, `messages`, `stream`, `stream_options` (streaming
+        only), `max_tokens`, `temperature`, plus the per-model defaults from `LGAI_MODEL_DEFAULTS`.
+
+        Python SDK:
+        ```python
+        from openai import OpenAI, Stream
+        from openai.types.chat import ChatCompletion, ChatCompletionChunk
+        client = OpenAI(base_url="https://HOST/v1", api_key="lgai_...")
+        r = client.post("/tasks/review", cast_to=ChatCompletion,
+                        body={"language": "python", "code": src})
+        print(r.choices[0].message.content)
+        ```
+        Defaults per task (clamped to `LGAI_MAX_TOKENS_CAP`, and to `LGAI_NONSTREAM_MAX_TOKENS` when
+        not streaming): explain 512 tok / T=0.2, review 1024 / 0.2, tests 1024 / 0.2, fix 1024 / 0.1.
+      parameters:
+        - name: task
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [explain, review, tests, fix]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TaskRequest'}
+            examples:
+              explain:
+                summary: Explain a Java method
+                value:
+                  language: java
+                  code: "public static int f(int[] a){int s=0;for(int x:a)s+=x;return s/a.length;}"
+              review:
+                summary: Review C code, streaming
+                value:
+                  language: c
+                  stream: true
+                  code: "char buf[8]; strcpy(buf, argv[1]); printf(buf);"
+              tests:
+                summary: Generate Go tests
+                value:
+                  language: go
+                  framework: testing (table-driven)
+                  code: "func Clamp(x, lo, hi int) int { if x < lo { return lo }; if x > hi { return hi }; return x }"
+              fix:
+                summary: Fix Python code given its traceback
+                value:
+                  language: python
+                  code: "def avg(xs):\n    return sum(xs) / len(xs)\n\nprint(avg([]))"
+                  error: "ZeroDivisionError: division by zero"
+      responses:
+        '200':
+          description: Same shapes as `/v1/chat/completions`.
+          headers:
+            X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChatCompletion'}
+            text/event-stream:
+              schema:
+                type: string
+                description: 'SSE stream of ChatCompletionChunk objects, terminated by `data: [DONE]`.'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '408': {$ref: '#/components/responses/RequestTimeout'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '502': {$ref: '#/components/responses/BadGateway'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+        '504': {$ref: '#/components/responses/GatewayTimeout'}
+
+  /admin/keys:
+    servers: &adminServers
+      - url: http://127.0.0.1:8081
+        description: Admin listener (reach it over SSH, e.g. ssh -L 8081:127.0.0.1:8081)
+    post:
+      tags: [admin]
+      operationId: createKey
+      summary: Create an API key. The plaintext key is returned once, in this response only.
+      security:
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/KeyCreateRequest'}
+            examples:
+              seat:
+                value: {name: lab-07, expires_at: '2026-10-14T18:00:00Z'}
+              loadtest:
+                summary: Load-test key (no rate limit or quota, 8 concurrent). Revoke right after the run.
+                value: {name: loadtest, rpm_limit: 0, daily_token_quota: 0, max_inflight: 8}
+      responses:
+        '201':
+          description: |
+            Created. `key` is shown only here. It is stored as SHA-256 and cannot be retrieved again.
+          headers:
+            X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+            Cache-Control:
+              schema: {type: string, const: no-store}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KeyCreated'}
+              example:
+                id: 7
+                name: lab-07
+                key: lgai_Xy3kQ9aaAp8_sdNu-uQiIrf97dOOYJVvCVvgWjZqvec
+                key_prefix: lgai_Xy3kQ9a
+                created_at: '2026-10-14T13:05:00Z'
+                expires_at: '2026-10-14T18:00:00Z'
+                revoked_at: null
+                rpm_limit: null
+                daily_token_quota: null
+                max_inflight: null
+                last_used_at: null
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AdminUnauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+    get:
+      tags: [admin]
+      operationId: listKeys
+      summary: List all keys (active, expired and revoked). Never includes plaintext or hashes.
+      security:
+        - adminToken: []
+      responses:
+        '200':
+          description: Keys ordered by id
+          headers:
+            X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KeyList'}
+              example:
+                object: list
+                data:
+                  - {id: 1, name: team-demo, key_prefix: lgai_Q1w2E3r, created_at: '2026-10-13T09:00:00Z', expires_at: null, revoked_at: null, rpm_limit: 120, daily_token_quota: 0, max_inflight: 4, last_used_at: '2026-10-14T13:10:12Z'}
+                  - {id: 7, name: lab-07, key_prefix: lgai_Xy3kQ9a, created_at: '2026-10-14T13:05:00Z', expires_at: '2026-10-14T18:00:00Z', revoked_at: '2026-10-14T17:00:00Z', rpm_limit: null, daily_token_quota: null, max_inflight: null, last_used_at: '2026-10-14T16:58:40Z'}
+        '401': {$ref: '#/components/responses/AdminUnauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /admin/keys/batch:
+    servers: *adminServers
+    post:
+      tags: [admin]
+      operationId: createKeyBatch
+      summary: Create `count` keys named name_prefix + zero-padded index; plaintext keys returned once.
+      description: |
+        Names are `name_prefix` followed by the index, zero-padded to at least 2 digits (or to the
+        width of `count`): `lab-01` … `lab-40`. Use seat labels, never real names. `scripts/mint-keys.sh`
+        wraps this call and writes `keys.csv` (mode 0600) plus printable slips.
+      security:
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/KeyBatchRequest'}
+            example: {count: 40, name_prefix: lab-, expires_at: '2026-10-14T18:00:00Z'}
+      responses:
+        '201':
+          description: 'The created keys, each with its plaintext `key`. Sent with `Cache-Control: no-store`.'
+          headers:
+            X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KeyBatchCreated'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AdminUnauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /admin/keys/revoke:
+    servers: *adminServers
+    post:
+      tags: [admin]
+      operationId: revokeKeys
+      summary: Revoke every active key whose name starts with name_prefix, or all keys.
+      description: 'Send exactly one of `{"name_prefix": "lab-"}` or `{"all": true}`. Takes effect on the next request.'
+      security:
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RevokeRequest'}
+            examples:
+              prefix: {value: {name_prefix: lab-}}
+              all: {value: {all: true}}
+      responses:
+        '200':
+          description: Number of keys revoked by this call
+          headers:
+            X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RevokeResult'}
+              example: {revoked: 40}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AdminUnauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /admin/keys/{id}:
+    servers: *adminServers
+    get:
+      tags: [admin]
+      operationId: getKey
+      summary: One key (never plaintext or hash).
+      security:
+        - adminToken: []
+      parameters:
+        - {$ref: '#/components/parameters/KeyID'}
+      responses:
+        '200':
+          description: The key
+          headers:
+            X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Key'}
+        '401': {$ref: '#/components/responses/AdminUnauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/KeyNotFound'}
+    delete:
+      tags: [admin]
+      operationId: revokeKey
+      summary: Revoke a key (soft delete, idempotent). It takes effect on the next request.
+      description: |
+        Sets `revoked_at`. Usage rows are kept. Requests already in flight finish. Every later request
+        with this key returns 401.
+      security:
+        - adminToken: []
+      parameters:
+        - {$ref: '#/components/parameters/KeyID'}
+      responses:
+        '200':
+          description: The key after revocation
+          headers:
+            X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Key'}
+        '401': {$ref: '#/components/responses/AdminUnauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/KeyNotFound'}
+
+  /admin/keys/{id}/usage:
+    servers: *adminServers
+    get:
+      tags: [admin]
+      operationId: getKeyUsage
+      summary: Usage summary for one key in [since, until).
+      description: For numbers across all keys (without names) run `scripts/report.sql` on the database.
+      security:
+        - adminToken: []
+      parameters:
+        - {$ref: '#/components/parameters/KeyID'}
+        - {$ref: '#/components/parameters/Since'}
+        - {$ref: '#/components/parameters/Until'}
+      responses:
+        '200':
+          description: Aggregated usage. Counts are zero if the key has no requests in range.
+          headers:
+            X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UsageSummary'}
+              example:
+                key_id: 7
+                name: lab-07
+                since: '2026-10-14T00:00:00Z'
+                until: '2026-10-14T17:30:00Z'
+                requests: 42
+                ok: 37
+                rate_limited: 2
+                overloaded: 1
+                upstream_errors: 0
+                client_cancelled: 2
+                prompt_tokens: 18230
+                completion_tokens: 21544
+                total_tokens: 39774
+                estimated_rows: 0
+                avg_ttft_ms: 910
+                avg_latency_ms: 14200
+                first_request_at: '2026-10-14T13:07:02Z'
+                last_request_at: '2026-10-14T16:58:40Z'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AdminUnauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/KeyNotFound'}
+
+  /admin/maintenance:
+    servers: *adminServers
+    get:
+      tags: [admin]
+      operationId: getMaintenance
+      summary: Whether maintenance mode is on.
+      security:
+        - adminToken: []
+      responses:
+        '200':
+          description: Current state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Maintenance'}
+        '401': {$ref: '#/components/responses/AdminUnauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    put:
+      tags: [admin]
+      operationId: setMaintenance
+      summary: Switch maintenance mode (the kill switch).
+      description: |
+        While enabled, chat and task requests return 503 `maintenance` with `Retry-After`;
+        `/v1/models`, the health probes and the admin API keep working. The state is in memory
+        and resets to off on restart.
+      security:
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Maintenance'}
+            example: {enabled: true}
+      responses:
+        '200':
+          description: New state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Maintenance'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/AdminUnauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: 'lgai_<43 chars base64url>'
+      description: |
+        Per-person API key, created by the admin. Send it only as `Authorization: Bearer lgai_...`
+        (scheme case-insensitive). Query strings, cookies and `X-API-Key` are ignored.
+    adminToken:
+      type: http
+      scheme: bearer
+      description: |
+        Value of `LGAI_ADMIN_TOKEN`: at least 43 characters and 16 distinct characters, no
+        placeholder words (generate with `openssl rand -base64 32` or `gateway gen-secret`).
+        Missing header → 401; wrong token (including a user key) → 403. Without a token the admin
+        listener does not start.
+
+  parameters:
+    KeyID:
+      name: id
+      in: path
+      required: true
+      schema: {type: integer, format: int64, minimum: 1}
+    Since:
+      name: since
+      in: query
+      required: false
+      description: RFC 3339 start (inclusive). Default is 00:00 UTC today.
+      schema: {type: string, format: date-time}
+    Until:
+      name: until
+      in: query
+      required: false
+      description: RFC 3339 end (exclusive). Default is now.
+      schema: {type: string, format: date-time}
+
+  headers:
+    X-Request-ID:
+      description: |
+        Request id, also in logs, usage rows and the upstream request. A valid incoming `X-Request-ID`
+        (`[A-Za-z0-9._-]{1,64}`) is reused; otherwise 16 hex characters are generated.
+      schema: {type: string}
+    Retry-After:
+      description: Seconds to wait before retrying (integer, at least 1).
+      schema: {type: integer, minimum: 1}
+    X-Should-Retry:
+      description: Set to `false` on quota errors, so the `openai` client does not retry automatically.
+      schema: {type: string, enum: ['false']}
+
+  responses:
+    BadRequest:
+      description: Malformed JSON, missing or invalid field, unknown field (tasks, admin), unsupported parameter, or the upstream rejected the request (e.g. context length).
+      headers:
+        X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          examples:
+            invalidJSON:
+              value: {error: {message: invalid JSON body, type: invalid_request_error, code: invalid_json, param: null}}
+            missingField:
+              value: {error: {message: 'language is required: one of python, java, go, c, cpp', type: invalid_request_error, code: missing_field, param: language}}
+            unsupported:
+              value: {error: {message: 'n must be 1; multiple choices are not supported', type: invalid_request_error, code: unsupported_parameter, param: n}}
+            mediaPart:
+              value: {error: {message: only text content parts are supported, type: invalid_request_error, code: unsupported_parameter, param: 'messages[0].content[1].type'}}
+            contextLength:
+              value: {error: {message: "upstream rejected the request: maximum context length exceeded", type: invalid_request_error, code: context_length_exceeded, param: null}}
+    Unauthorized:
+      description: Missing, malformed, unknown, revoked or expired API key (one identical response).
+      headers:
+        X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {error: {message: 'invalid or missing API key; send it as Authorization: Bearer lgai_...', type: authentication_error, code: invalid_api_key, param: null}}
+    AdminUnauthorized:
+      description: Missing admin bearer token.
+      headers:
+        X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {error: {message: missing admin token, type: authentication_error, code: missing_admin_token, param: null}}
+    Forbidden:
+      description: Admin bearer token present but wrong (including a normal `lgai_` key).
+      headers:
+        X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {error: {message: invalid admin token, type: permission_error, code: forbidden, param: null}}
+    NotFound:
+      description: Unknown route, unknown task, or unknown model.
+      headers:
+        X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          examples:
+            unknownTask:
+              value: {error: {message: 'unknown task; one of explain, review, tests, fix', type: not_found_error, code: unknown_task, param: task}}
+            modelNotFound:
+              value: {error: {message: 'model "gpt-4o" not found; see GET /v1/models', type: not_found_error, code: model_not_found, param: model}}
+    ModelNotFound:
+      description: Unknown model alias (not in `LGAI_MODELS`).
+      headers:
+        X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {error: {message: 'model "gpt-4o" not found; see GET /v1/models', type: not_found_error, code: model_not_found, param: model}}
+    KeyNotFound:
+      description: No key with this id.
+      headers:
+        X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {error: {message: key not found, type: not_found_error, code: key_not_found, param: id}}
+    MethodNotAllowed:
+      description: The path exists but not for this method (OPTIONS included; there is no CORS). `Allow` lists the methods.
+      headers:
+        X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+        Allow:
+          schema: {type: string}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {error: {message: 'method not allowed; allowed: POST', type: invalid_request_error, code: method_not_allowed, param: null}}
+    RequestTimeout:
+      description: The request body was not received within `LGAI_BODY_READ_TIMEOUT`. The connection is closed.
+      headers:
+        X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {error: {message: the request body was not received in time, type: invalid_request_error, code: request_timeout, param: null}}
+    PayloadTooLarge:
+      description: Body larger than `LGAI_MAX_BODY_BYTES`, chat input larger than `LGAI_CHAT_MAX_INPUT_BYTES`, or task input (code + error + instructions + framework) larger than `LGAI_TASK_MAX_INPUT_BYTES`.
+      headers:
+        X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {error: {message: 'task input is 40213 bytes; the limit is 16384', type: invalid_request_error, code: request_too_large, param: code}}
+    TooManyRequests:
+      description: |
+        A per-key limit was hit. `Retry-After` is always set.
+        * `rate_limit_exceeded`: token bucket empty; retry after the refill time. Also sent, before the
+          body is read, when the key has had too many requests refused (invalid, limited or overloaded;
+          about 10 at once, then 30 per minute).
+        * `concurrency_limit_exceeded`: too many simultaneous requests for this key; retry after 1 s. The
+          slot is taken before the body is read, so a slow upload counts.
+        * `insufficient_quota`: daily token quota used up; `Retry-After` = seconds until 00:00 UTC,
+          plus `X-Should-Retry: false`.
+      headers:
+        X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+        Retry-After: {$ref: '#/components/headers/Retry-After'}
+        X-Should-Retry: {$ref: '#/components/headers/X-Should-Retry'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          examples:
+            rate:
+              value: {error: {message: 'rate limit of 6 requests/min exceeded; retry in 10s', type: rate_limit_error, code: rate_limit_exceeded, param: null}}
+            concurrency:
+              value: {error: {message: 'at most 1 concurrent requests per key', type: rate_limit_error, code: concurrency_limit_exceeded, param: null}}
+            quota:
+              value: {error: {message: 'daily token quota of 300000 exhausted; resets at 00:00 UTC', type: insufficient_quota, code: insufficient_quota, param: null}}
+    BadGateway:
+      description: The upstream is unreachable, answered 3xx (redirects are never followed), 401/403/404 or 5xx, or sent an invalid response. The message is generic.
+      headers:
+        X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {error: {message: upstream model server error, type: server_error, code: upstream_error, param: null}}
+    ServiceUnavailable:
+      description: |
+        Global overload or maintenance. `Retry-After` is always set.
+        * `server_overloaded`: the wait queue is full, the wait exceeded `LGAI_QUEUE_TIMEOUT`, or the
+          upstream itself answered 429/503.
+        * `maintenance`: maintenance mode is on (`PUT /admin/maintenance`).
+      headers:
+        X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+        Retry-After: {$ref: '#/components/headers/Retry-After'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          examples:
+            queueFull:
+              value: {error: {message: 'server busy: queue full; retry later', type: server_error, code: server_overloaded, param: null}}
+            queueTimeout:
+              value: {error: {message: 'server busy: queue wait timed out; retry later', type: server_error, code: server_overloaded, param: null}}
+            maintenance:
+              value: {error: {message: 'the service is in maintenance; retry later', type: server_error, code: maintenance, param: null}}
+    GatewayTimeout:
+      description: The upstream sent no response headers within `LGAI_UPSTREAM_HEADER_TIMEOUT` (streaming only), or exceeded `LGAI_UPSTREAM_TIMEOUT`.
+      headers:
+        X-Request-ID: {$ref: '#/components/headers/X-Request-ID'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {error: {message: upstream model server timed out, type: server_error, code: upstream_timeout, param: null}}
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, type, code, param]
+          properties:
+            message: {type: string, description: Human-readable. Never contains prompt content, keys or internal addresses.}
+            type:
+              type: string
+              enum: [invalid_request_error, authentication_error, permission_error, not_found_error, rate_limit_error, insufficient_quota, server_error]
+            code:
+              type: string
+              description: Machine-readable code.
+              enum:
+                - invalid_json
+                - missing_field
+                - invalid_value
+                - unknown_field
+                - unsupported_parameter
+                - context_length_exceeded
+                - request_too_large
+                - request_timeout
+                - invalid_api_key
+                - missing_admin_token
+                - forbidden
+                - not_found
+                - method_not_allowed
+                - unknown_task
+                - model_not_found
+                - key_not_found
+                - rate_limit_exceeded
+                - concurrency_limit_exceeded
+                - insufficient_quota
+                - upstream_error
+                - upstream_unavailable
+                - upstream_timeout
+                - server_overloaded
+                - maintenance
+                - internal_error
+            param: {type: ['string', 'null'], description: Offending field, if any.}
+
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, const: ok}
+
+    Ready:
+      type: object
+      required: [status, upstream, db]
+      properties:
+        status: {type: string, const: ready}
+        upstream: {type: string, const: ok}
+        db: {type: string, const: ok}
+
+    Model:
+      type: object
+      required: [id, object, created, owned_by]
+      properties:
+        id: {type: string, description: Public alias, e.g. `coder`.}
+        object: {type: string, const: model}
+        created: {type: integer, description: Unix seconds (gateway start time).}
+        owned_by: {type: string, const: local-generative-ai}
+
+    ModelList:
+      type: object
+      required: [object, data]
+      properties:
+        object: {type: string, const: list}
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/Model'}
+
+    TextPart:
+      type: object
+      required: [type, text]
+      properties:
+        type: {type: string, const: text}
+        text: {type: string}
+
+    ChatMessage:
+      type: object
+      required: [role]
+      description: Other message fields (e.g. `reasoning_content`, `audio`, `refusal`) are dropped.
+      properties:
+        role: {type: string, enum: [system, developer, user, assistant, tool]}
+        content:
+          description: |
+            Text, or up to 64 text parts (flattened to one string, joined by newlines). Any other part
+            type (`image_url`, `input_audio`, `file`, …) returns 400. `null` only for an assistant
+            message with `tool_calls`.
+          oneOf:
+            - type: string
+            - type: array
+              maxItems: 64
+              items: {$ref: '#/components/schemas/TextPart'}
+            - type: 'null'
+        name: {type: string, pattern: '^[A-Za-z0-9_-]{1,64}$'}
+        tool_calls:
+          type: array
+          maxItems: 16
+          description: Assistant messages only. Arguments count towards the input cap.
+          items:
+            type: object
+            required: [id, type, function]
+            properties:
+              id: {type: string, maxLength: 64}
+              type: {type: string, const: function}
+              function:
+                type: object
+                required: [name, arguments]
+                properties:
+                  name: {type: string, pattern: '^[A-Za-z0-9_-]{1,64}$'}
+                  arguments: {type: string}
+        tool_call_id: {type: string, maxLength: 64, description: Tool messages only.}
+
+    StreamOptions:
+      type: object
+      properties:
+        include_usage:
+          type: boolean
+          description: If true, the client also receives the final usage-only chunk (`choices` is empty).
+
+    Tool:
+      type: object
+      required: [type, function]
+      properties:
+        type: {type: string, const: function}
+        function:
+          type: object
+          required: [name]
+          properties:
+            name: {type: string, pattern: '^[A-Za-z0-9_-]{1,64}$'}
+            description: {type: string, maxLength: 1024}
+            parameters: {type: object, description: 'JSON Schema object; at most 8 KiB and 8 levels deep.'}
+
+    ChatCompletionRequest:
+      type: object
+      description: |
+        Only the properties listed here are forwarded (after validation). Other properties are
+        accepted and dropped, except those refused as noted.
+      required: [messages]
+      properties:
+        model: {type: string, maxLength: 64, description: Public alias. Default is the first entry of `LGAI_MODELS`., examples: [coder]}
+        messages:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items: {$ref: '#/components/schemas/ChatMessage'}
+        stream: {type: boolean, default: false}
+        stream_options: {$ref: '#/components/schemas/StreamOptions'}
+        max_tokens: {type: ['integer', 'null'], minimum: 1, description: 'Default `LGAI_CHAT_DEFAULT_MAX_TOKENS`; clamped to `LGAI_MAX_TOKENS_CAP` (and `LGAI_NONSTREAM_MAX_TOKENS` when not streaming).'}
+        max_completion_tokens: {type: ['integer', 'null'], minimum: 1, description: 'Merged with max_tokens (the smaller wins); never forwarded.'}
+        temperature: {type: number, minimum: 0, maximum: 2}
+        top_p: {type: number, exclusiveMinimum: 0, maximum: 1}
+        top_k: {type: integer, description: '-1, 0 or 1-100. vLLM / llama.cpp extension (Ollama ignores it).'}
+        stop:
+          oneOf:
+            - {type: string, minLength: 1, maxLength: 64}
+            - type: array
+              items: {type: string, minLength: 1, maxLength: 64}
+              maxItems: 4
+        seed: {type: integer}
+        frequency_penalty: {type: number, minimum: -2, maximum: 2}
+        presence_penalty: {type: number, minimum: -2, maximum: 2}
+        response_format:
+          type: object
+          required: [type]
+          properties:
+            type: {type: string, enum: [text, json_object], description: Other types (json_schema, structural_tag, …) return 400.}
+        tools:
+          type: array
+          maxItems: 16
+          items: {$ref: '#/components/schemas/Tool'}
+        tool_choice: {type: string, enum: [none, auto], description: '`required` or a named function returns 400.'}
+        parallel_tool_calls: {type: boolean, description: Forwarded only together with tools.}
+        reasoning_effort: {type: string, enum: [low, medium, high]}
+        chat_template_kwargs:
+          type: object
+          additionalProperties: false
+          description: 'Only `{"enable_thinking": bool}`; any other key or type returns 400 (CVE-2025-61620, CVE-2025-62426). vLLM / llama.cpp extension; Ollama ignores it.'
+          properties:
+            enable_thinking: {type: boolean}
+        n: {type: integer, const: 1, description: Only 1 is supported; not forwarded.}
+      additionalProperties: true
+
+    TaskRequest:
+      type: object
+      additionalProperties: false
+      required: [language, code]
+      properties:
+        language:
+          type: string
+          enum: [python, java, go, c, cpp]
+        code:
+          type: string
+          minLength: 1
+          description: Source code. `code + error + instructions + framework` must fit in `LGAI_TASK_MAX_INPUT_BYTES` (default 16384).
+        error:
+          type: string
+          description: Compiler, runtime or test output. **Required for `fix`.** Optional context for the other tasks.
+        instructions:
+          type: string
+          maxLength: 1000
+          description: Optional extra request, e.g. "focus on memory safety" or "answer in Italian".
+        framework:
+          type: string
+          pattern: '^[A-Za-z0-9 .+#()/_-]{1,64}$'
+          description: Only for `tests` (400 otherwise); goes into the user message. Defaults are pytest, JUnit 5, Go `testing` (table-driven), assert.h (C) and GoogleTest (C++).
+        model: {type: string, description: Public alias; default model if omitted.}
+        stream: {type: boolean, default: false}
+        stream_options: {$ref: '#/components/schemas/StreamOptions'}
+        max_tokens: {type: integer, minimum: 1, description: 'Overrides the task default; clamped like chat.'}
+        temperature: {type: number, minimum: 0, maximum: 2, description: Overrides the task default.}
+
+    Usage:
+      type: object
+      required: [prompt_tokens, completion_tokens, total_tokens]
+      properties:
+        prompt_tokens: {type: integer}
+        completion_tokens: {type: integer}
+        total_tokens: {type: integer}
+      additionalProperties: true
+
+    ChatCompletion:
+      type: object
+      description: Upstream response relayed unchanged. The shape is guaranteed by the OpenAI-compatible upstream.
+      required: [id, object, created, model, choices]
+      properties:
+        id: {type: string}
+        object: {type: string, const: chat.completion}
+        created: {type: integer}
+        model: {type: string, description: Upstream model id (not rewritten to the alias).}
+        choices:
+          type: array
+          items:
+            type: object
+            required: [index, message]
+            properties:
+              index: {type: integer}
+              message:
+                type: object
+                properties:
+                  role: {type: string, const: assistant}
+                  content: {type: ['string', 'null']}
+                  reasoning: {type: string, description: Present for reasoning models on some backends.}
+                  tool_calls: {type: array, items: {type: object}}
+              finish_reason: {type: ['string', 'null'], enum: [stop, length, tool_calls, content_filter, null]}
+        usage: {$ref: '#/components/schemas/Usage'}
+      additionalProperties: true
+
+    ChatCompletionChunk:
+      type: object
+      description: One SSE `data:` event payload.
+      required: [id, object, created, model, choices]
+      properties:
+        id: {type: string}
+        object: {type: string, const: chat.completion.chunk}
+        created: {type: integer}
+        model: {type: string}
+        choices:
+          type: array
+          description: Empty in the final usage-only chunk.
+          items:
+            type: object
+            properties:
+              index: {type: integer}
+              delta:
+                type: object
+                properties:
+                  role: {type: string}
+                  content: {type: ['string', 'null']}
+                  reasoning: {type: string}
+                  reasoning_content: {type: string}
+                  tool_calls: {type: array, items: {type: object}}
+              finish_reason: {type: ['string', 'null']}
+        usage:
+          oneOf:
+            - $ref: '#/components/schemas/Usage'
+            - type: 'null'
+      additionalProperties: true
+
+    KeyCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100, description: 'A seat or role label such as `lab-07` or `team-demo`, never a real name. Does not have to be unique.'}
+        expires_at: {type: ['string', 'null'], format: date-time, description: 'Must be in the future. Absent or null → now + `LGAI_KEY_TTL` (if > 0), else no expiry.'}
+        rpm_limit: {type: ['integer', 'null'], minimum: 0, description: 'Override `LGAI_RATE_RPM` (0 = unlimited, null = default).'}
+        daily_token_quota: {type: ['integer', 'null'], minimum: 0, description: 'Override `LGAI_TOKEN_QUOTA_DAILY` (0 = unlimited, null = default).'}
+        max_inflight: {type: ['integer', 'null'], minimum: 0, description: 'Override `LGAI_KEY_MAX_INFLIGHT` (0 = unlimited, null = default).'}
+
+    KeyBatchRequest:
+      type: object
+      additionalProperties: false
+      required: [count, name_prefix]
+      properties:
+        count: {type: integer, minimum: 1, maximum: 200}
+        name_prefix: {type: string, minLength: 1, maxLength: 90, description: e.g. `lab-`}
+        expires_at: {type: ['string', 'null'], format: date-time, description: As in KeyCreateRequest.}
+
+    Key:
+      type: object
+      required: [id, name, key_prefix, created_at, expires_at, revoked_at, rpm_limit, daily_token_quota, max_inflight, last_used_at]
+      properties:
+        id: {type: integer, format: int64}
+        name: {type: string}
+        key_prefix: {type: string, description: First 12 characters of the key, for identification.}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: ['string', 'null'], format: date-time, description: An expired key gets the same 401 as an unknown one.}
+        revoked_at: {type: ['string', 'null'], format: date-time}
+        rpm_limit: {type: ['integer', 'null']}
+        daily_token_quota: {type: ['integer', 'null']}
+        max_inflight: {type: ['integer', 'null']}
+        last_used_at: {type: ['string', 'null'], format: date-time}
+
+    KeyCreated:
+      allOf:
+        - $ref: '#/components/schemas/Key'
+        - type: object
+          required: [key]
+          properties:
+            key:
+              type: string
+              pattern: '^lgai_[A-Za-z0-9_-]{43}$'
+              description: Plaintext key. Shown once. Give it to the person, then forget it.
+
+    KeyBatchCreated:
+      type: object
+      required: [object, data]
+      properties:
+        object: {type: string, const: list}
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/KeyCreated'}
+
+    KeyList:
+      type: object
+      required: [object, data]
+      properties:
+        object: {type: string, const: list}
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/Key'}
+
+    RevokeRequest:
+      type: object
+      additionalProperties: false
+      description: Exactly one of `name_prefix` (non-empty) or `all` (true).
+      properties:
+        name_prefix: {type: string, minLength: 1}
+        all: {type: boolean}
+
+    RevokeResult:
+      type: object
+      required: [revoked]
+      properties:
+        revoked: {type: integer, description: Keys revoked by this call (already revoked ones are not counted).}
+
+    Maintenance:
+      type: object
+      required: [enabled]
+      additionalProperties: false
+      properties:
+        enabled: {type: boolean}
+
+    UsageSummary:
+      type: object
+      required: [key_id, name, since, until, requests, ok, rate_limited, overloaded, upstream_errors, client_cancelled, prompt_tokens, completion_tokens, total_tokens, estimated_rows, avg_ttft_ms, avg_latency_ms, first_request_at, last_request_at]
+      properties:
+        key_id: {type: integer, format: int64}
+        name: {type: string}
+        since: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+        requests: {type: integer, description: 'Recorded requests: those that passed validation, with any outcome. Invalid requests (400/404/408/413) and refusals before the body is read are logged only.'}
+        ok: {type: integer, description: status 200}
+        rate_limited: {type: integer, description: status 429}
+        overloaded: {type: integer, description: status 503}
+        upstream_errors: {type: integer, description: 'status >= 500 except 503'}
+        client_cancelled: {type: integer, description: status 499 (client disconnected)}
+        prompt_tokens: {type: integer}
+        completion_tokens: {type: integer}
+        total_tokens: {type: integer}
+        estimated_rows: {type: integer, description: Rows whose token counts were estimated (ADR 0004).}
+        avg_ttft_ms: {type: ['integer', 'null'], description: Streaming requests only.}
+        avg_latency_ms: {type: ['integer', 'null']}
+        first_request_at: {type: ['string', 'null'], format: date-time}
+        last_request_at: {type: ['string', 'null'], format: date-time}

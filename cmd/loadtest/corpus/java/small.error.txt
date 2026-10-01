@@ -1,0 +1,6 @@
+$ javac Temperatures.java && java Temperatures
+Temperatures: [12, 15, 11, 18, 21, 19, 24]
+Average: 17.14
+Exception in thread "main" java.lang.ArrayIndexOutOfBoundsException: Index 7 out of bounds for length 7
+	at Temperatures.maxRise(Temperatures.java:18)
+	at Temperatures.main(Temperatures.java:30)
