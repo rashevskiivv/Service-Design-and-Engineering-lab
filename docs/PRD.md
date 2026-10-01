@@ -136,3 +136,7 @@ Critical claims from agents (prices, quotas, benchmarks) are verified against pr
 ## 11. Decision log
 
 - **2026-09-30**: Scope, users, load (30 concurrent), budget (€0), laptop + server modes, API surface (OpenAI-compatible + explain/review/tests/fix, streaming), per-person keys + admin API + usage stats (no content), handoff line with Jan, and agent roster, all agreed with Slava. FIM deferred.
+- **2026-09-30**: Cloud. OVH dropped: its trial bills the card automatically after the credit runs out, so there's no hard cap. **Modal is primary**, with a $28 Workspace budget and a $0 spend limit. GCP Cloud Run is the optional backup. Also asking the professor for credits or a UniTrento GPU.
+- **2026-09-30**: Topology. Gateway + SQLite on a **separate always-on free CPU VM** (Oracle Always Free; Azure for Students as fallback), deployed by Jan. Modal vLLM is the upstream only.
+- **2026-09-30**: Model. Qwen3.6-35B-A3B-FP8 on L40S, thinking off; same-GPU fallback Qwen3-Coder-30B-A3B-Instruct-FP8. Szymon's smoke review picks between them. Lab date: ask the professor.
+- **2026-10-01**: Code review (1 major, 7 minor) and security code review (2 high, 3 low) done. All fixed and re-verified live against Ollama on Slava's Mac. All §8 acceptance criteria met in laptop mode; GPU numbers are pending the rehearsal.
