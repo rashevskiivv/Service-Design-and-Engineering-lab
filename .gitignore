@@ -22,3 +22,4 @@ bin/
 # IDE: shared project settings stay tracked; per-user state does not
 .idea/workspace.xml
 .idea/shelf/
+.idea
