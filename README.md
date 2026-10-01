@@ -40,7 +40,7 @@ scripts/report.sql   aggregate numbers for the slides (no key names)
    ```sh
    export LGAI_MODELS=coder=gpt-oss:20b
    export LGAI_MODEL_DEFAULTS='coder={"reasoning_effort":"low"}'
-   export LGAI_ADMIN_TOKEN="$(go run ./cmd/gateway gen-secret)"   # or: openssl rand -base64 32
+   export LGAI_ADMIN_TOKEN="$(go run ./cmd/gateway gen-secret)"
    go run ./cmd/gateway
    ```
 

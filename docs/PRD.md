@@ -97,7 +97,7 @@ During one lab session, classmates solve Szymon's coding exercises with the help
 
 ## 8. Acceptance criteria
 
-- [ ] `go test -race ./...` passes.
+- [x] `go test -race ./...` passes.
 - [ ] Against real Ollama on Slava's Mac: non-streaming and streaming chat, plus all four task endpoints, work end to end via curl **and** via the official `openai` Python client.
 - [ ] Missing / invalid / revoked key → `401`; over the rate limit → `429` with `Retry-After`; saturated queue → `503` with `Retry-After`.
 - [ ] The admin can create a key, use it, revoke it, and see its usage.

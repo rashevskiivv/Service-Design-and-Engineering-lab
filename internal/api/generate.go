@@ -122,7 +122,7 @@ func (c *call) finish() {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.r.Context()), usageWriteTimeout)
 	defer cancel()
 	if err := c.s.store.InsertUsage(ctx, c.row); err != nil {
-		c.s.log.Error("usage insert failed", "request_id", c.row.RequestID, "err", err)
+		c.s.log.Error("usage insert failed", "request_id", c.row.RequestID, "error", err)
 	}
 }
 
@@ -162,7 +162,7 @@ func (c *call) admit() (release func(), ok bool) {
 			c.fail(clientClosed())
 		default:
 			refund()
-			s.log.Error("quota check failed", "request_id", c.row.RequestID, "err", err)
+			s.log.Error("quota check failed", "request_id", c.row.RequestID, "error", err)
 			c.fail(oai.Internal())
 		}
 		return nil, false

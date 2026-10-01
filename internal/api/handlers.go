@@ -143,7 +143,7 @@ func (s *Server) probeReady(ctx context.Context) bool {
 		cancel()
 	}
 	if err != nil {
-		s.log.Warn("readiness probe failed", "err", err)
+		s.log.Warn("readiness probe failed", "error", err)
 	}
 	s.ready.ok, s.ready.at = err == nil, time.Now()
 	return s.ready.ok

@@ -63,7 +63,7 @@ func RequireKey(l KeyLookup, defaults config.Limits, now func() time.Time, log *
 			k, err := l.KeyByHash(r.Context(), Hash(token), now())
 			if err != nil {
 				if !errors.Is(err, store.ErrNotFound) {
-					log.Error("key lookup failed", "err", err)
+					log.Error("key lookup failed", "error", err)
 					oai.WriteError(w, oai.Internal())
 					return
 				}

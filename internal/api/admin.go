@@ -316,13 +316,13 @@ func (s *Server) keyResult(w http.ResponseWriter, action string, id int64, err e
 	case errors.Is(err, store.ErrNotFound):
 		oai.WriteError(w, keyNotFound())
 	default:
-		s.log.Error("admin action failed", "action", action, "key_id", id, "err", err)
+		s.log.Error("admin action failed", "action", action, "key_id", id, "error", err)
 		oai.WriteError(w, oai.Internal())
 	}
 	return false
 }
 
 func (s *Server) adminFailed(w http.ResponseWriter, action string, err error) {
-	s.log.Error("admin action failed", "action", action, "err", err)
+	s.log.Error("admin action failed", "action", action, "error", err)
 	oai.WriteError(w, oai.Internal())
 }

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -26,7 +27,10 @@ func healthcheck(addr string) int {
 	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "healthcheck: LGAI_ADDR must be host:port")
+		_, errL := fmt.Fprintln(os.Stderr, "healthcheck: LGAI_ADDR must be host:port")
+		if errL != nil {
+			slog.Error("healthcheck: LGAI_ADDR must be host:port", "error", errL)
+		}
 		return 1
 	}
 	if host == "" || host == "0.0.0.0" || host == "::" {
@@ -35,12 +39,23 @@ func healthcheck(addr string) int {
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get("http://" + net.JoinHostPort(host, port) + "/healthz")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "healthcheck:", err)
+		_, errL := fmt.Fprintln(os.Stderr, "healthcheck:", err)
+		if errL != nil {
+			slog.Error("healthcheck get", "error", errL)
+		}
 		return 1
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		errL := Body.Close()
+		if errL != nil {
+			slog.Error("healthcheck: body close", "error", errL)
+		}
+	}(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintln(os.Stderr, "healthcheck: status", resp.StatusCode)
+		_, errL := fmt.Fprintln(os.Stderr, "healthcheck: status", resp.StatusCode)
+		if errL != nil {
+			slog.Error("healthcheck: status", "error", errL)
+		}
 		return 1
 	}
 	return 0
@@ -51,12 +66,18 @@ func genSecret(w io.Writer) int {
 	for {
 		var b [32]byte
 		if _, err := rand.Read(b[:]); err != nil {
-			fmt.Fprintln(os.Stderr, "gen-secret:", err)
+			_, errL := fmt.Fprintln(os.Stderr, "gen-secret:", err)
+			if errL != nil {
+				slog.Error("gen-secret", "error", errL)
+			}
 			return 1
 		}
 		s := base64.StdEncoding.EncodeToString(b[:])
 		if config.ValidateSecret(s) == nil {
-			fmt.Fprintln(w, s)
+			_, errL := fmt.Fprintln(w, s)
+			if errL != nil {
+				slog.Error("gen-secret s", "error", errL)
+			}
 			return 0
 		}
 	}
@@ -77,7 +98,10 @@ func genKeys(args []string, stderr io.Writer) int {
 		return 2
 	}
 	fail := func(format string, a ...any) int {
-		fmt.Fprintf(stderr, "gen-keys: "+format+"\n", a...)
+		_, err := fmt.Fprintf(stderr, "gen-keys: "+format+"\n", a...)
+		if err != nil {
+			slog.Error("gen-keys", "error", err)
+		}
 		return 1
 	}
 	if *n < 1 || *n > 1000 || *prefix == "" || strings.ContainsAny(*prefix, ",\n") {
@@ -112,7 +136,10 @@ func genKeys(args []string, stderr io.Writer) int {
 	if err := writeNew(*hashes, hashed.String()); err != nil {
 		return fail("%v", err)
 	}
-	fmt.Fprintf(stderr, "wrote %d keys: %s (plaintext, hand out and then delete) and %s (set LGAI_KEYS_FILE to it)\n", *n, *out, *hashes)
+	_, err := fmt.Fprintf(stderr, "wrote %d keys: %s (plaintext, hand out and then delete) and %s (set LGAI_KEYS_FILE to it)\n", *n, *out, *hashes)
+	if err != nil {
+		slog.Error("fmt.Fprintf: gen-keys", "error", err)
+	}
 	return 0
 }
 

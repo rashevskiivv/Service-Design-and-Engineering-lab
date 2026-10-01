@@ -39,7 +39,11 @@ func main() {
 		os.Exit(subcommand(os.Args[1], os.Args[2:]))
 	}
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "gateway:", err)
+		slog.Error("run() finished with error", "error", err)
+		_, errL := fmt.Fprintln(os.Stderr, "gateway:", err)
+		if errL != nil {
+			slog.Error("fmt.Fprintln(os.Stderr, ...) finished with error", "error", errL)
+		}
 		os.Exit(1)
 	}
 }
@@ -56,7 +60,11 @@ func subcommand(name string, args []string) int {
 		fmt.Println("usage: gateway [healthcheck | gen-secret | gen-keys -n N -prefix P [-expires T] [-out F] [-hashes F]]")
 		return 0
 	}
-	fmt.Fprintf(os.Stderr, "gateway: unknown command %q (try: gateway help)\n", name)
+	_, err := fmt.Fprintf(os.Stderr, "gateway: unknown command %q (try: gateway help)\n", name)
+	if err != nil {
+		slog.Error("fmt.Fprintf(os.Stderr, ...) finished with error", "error", err)
+		return 1
+	}
 	return 2
 }
 
@@ -82,7 +90,7 @@ func run() error {
 	}
 	defer func() {
 		if err := st.Close(); err != nil {
-			log.Error("closing database", "err", err)
+			log.Error("closing database", "error", err)
 		}
 	}()
 	if cfg.KeysFile != "" {
@@ -137,7 +145,7 @@ func run() error {
 	case <-ctx.Done():
 		log.Info("shutting down", "timeout", cfg.HTTP.ShutdownTimeout.String())
 	case serveErr = <-errs:
-		log.Error("server failed; shutting down", "err", serveErr)
+		log.Error("server failed; shutting down", "error", serveErr)
 	}
 
 	// DECISIONS D4: Shutdown both listeners (in-flight streams may finish),
@@ -146,7 +154,7 @@ func run() error {
 	defer cancel()
 	for _, l := range slices.Backward(listeners) {
 		if err := l.srv.Shutdown(shCtx); err != nil {
-			log.Warn("forcing connections closed", "listener", l.name, "err", err)
+			log.Warn("forcing connections closed", "listener", l.name, "error", err)
 			_ = l.srv.Close()
 		}
 	}
@@ -155,7 +163,7 @@ func run() error {
 	waitCtx, cancelWait := context.WithTimeout(context.Background(), usageFlushTimeout)
 	defer cancelWait()
 	if err := srv.WaitCalls(waitCtx); err != nil {
-		log.Warn("usage rows of some requests may be lost", "err", err)
+		log.Warn("usage rows of some requests may be lost", "error", err)
 	}
 	log.Info("stopped")
 	return serveErr
@@ -179,7 +187,12 @@ func importKeys(ctx context.Context, st *store.Store, path string, log *slog.Log
 	if err != nil {
 		return fmt.Errorf("LGAI_KEYS_FILE: %w", err)
 	}
-	defer f.Close()
+	defer func(f *os.File) {
+		errL := f.Close()
+		if errL != nil {
+			log.Error("closing file", "error", errL)
+		}
+	}(f)
 	now := time.Now()
 	keys, expired, err := store.ParseKeysFile(f, now)
 	if err != nil {
@@ -200,7 +213,7 @@ func checkModels(ctx context.Context, up *upstream.Client, cfg config.Config, lo
 	defer cancel()
 	ids, err := up.ModelIDs(ctx)
 	if err != nil {
-		log.Warn("upstream model list unavailable at startup; continuing", "err", err)
+		log.Warn("upstream model list unavailable at startup; continuing", "error", err)
 		return
 	}
 	for _, m := range cfg.Models {
