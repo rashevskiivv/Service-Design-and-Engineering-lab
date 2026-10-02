@@ -169,3 +169,39 @@ Changed 2026-10-01 after the code reviews (`reviews/code-review.md` m4, m5; `rev
 - **Oracle Always Free A1** = 2 OCPU / 12 GB. https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm
 - **`Qwen/Qwen3.6-35B-A3B`** and its `-FP8` variant exist on Hugging Face.
 - **CVE-2025-62426** (vLLM `chat_template_kwargs` DoS) exists: GHSA-69j4-grxj-j64p.
+
+## D9. Response formats and downloadable results (2026-10-01, requested by Slava)
+
+**Why:** raw OpenAI SSE is unreadable in a terminal. Students using curl want the answer text, and want to save the result as a file.
+
+**Selection: by the `Accept` request header** (Slava's choice). The default is unchanged, so the openai SDK (`Accept: application/json`) and plain curl (`*/*`) keep getting today's responses.
+
+| `Accept` (first supported type by q-value) | Format | Response `Content-Type` | Streams? | File extension |
+|---|---|---|---|---|
+| missing, `*/*`, `application/json`, `text/event-stream` | **full** (today's OpenAI JSON / SSE) | as today | per `stream` | `.json` |
+| `text/plain` | **text**: the answer text only | `text/plain; charset=utf-8` | yes, live chunks if `stream: true` | `.md` |
+| `text/markdown` | **report**: header (endpoint/task, language, model alias + upstream id, UTC time), input (code / error / instructions fenced, or the chat messages), then the answer; footer with tokens and duration | `text/markdown; charset=utf-8` | yes: header, then the answer live, then the footer | `.md` |
+| `text/x-code` | **code**: only the fenced code block(s) from the answer, concatenated with one blank line between | `text/x-python`, `text/x-java`, `text/x-go`, `text/x-c`, `text/x-c++`, else `text/plain` (all `; charset=utf-8`) | no, always buffered (extraction needs the whole answer) | per language |
+| only unsupported types (e.g. `image/png`) | — | 406 `not_acceptable` (JSON error envelope) | — | — |
+
+**Rules**
+
+- **Upstream is always streamed** for text, report and code, even when the client sent `stream: false`; the gateway assembles the result.
+  - This avoids the non-stream header timeout and the Modal 150 s request limit.
+  - `LGAI_NONSTREAM_MAX_TOKENS` still clamps when the client asked for `stream: false`, so behaviour stays predictable.
+  - Usage accounting (`include_usage`), limits and queueing are unchanged.
+- **Errors before the first byte** stay JSON error envelopes with the same status codes in every format.
+  - Mid-stream errors in text/report append one line, `\n\n[error: <generic message>]\n`, then close.
+  - Code is buffered, so an upstream failure becomes a normal JSON 502.
+- **No code block found** in code format: return 200 with the whole answer as `text/plain`, filename `.txt`, and header `X-LGAI-Code-Blocks: 0`. Otherwise `X-LGAI-Code-Blocks: <n>`.
+- **Download.** Every text, report and code response, and every non-streaming full response, carries `Content-Disposition: attachment; filename="<name>"`. The SDK ignores it; `curl -OJ` and `wget --content-disposition` save the file under that name. No extra parameter is needed.
+- **Filenames** are built only from server-controlled parts plus a sanitised class name:
+  - base: `<task>-<language>-<id8>` for tasks, `chat-<id8>` for chat (`id8` = the first 8 hex characters of the request id);
+  - code + `tests`: Python `test_<id8>.py`, Go `<id8>_test.go`, Java `<Class>Test.java` (Class taken from `public class X` in the extracted code, else `Generated`);
+  - code + other tasks: Java uses `<Class>.java` when `public (final|abstract )?class X` is found;
+  - extensions: python `.py`, java `.java`, go `.go`, c `.c`, cpp `.cpp`;
+  - chat code language comes from the first fence's info string (`python`, `py`, `java`, `go`, `golang`, `c`, `cpp`, `c++`, `cc`), else `.txt`;
+  - any class name taken from model output must match `^[A-Za-z_][A-Za-z0-9_]{0,63}$`, else fall back. ASCII only, no quotes or slashes; `filename*=` is not needed.
+- **Fence parsing:** lines starting with three or more backticks open and close a block; the info string is the first word after the backticks; text outside fences is dropped in code format. Unterminated last fence: take until the end.
+- **Security unchanged:** same security headers (`nosniff`, CSP `default-src 'none'`, `no-store`), no CORS, no content logging. `Vary: Accept` on generation responses.
+- **Out of scope:** `?format=` query parameters (Slava chose `Accept`), HTML rendering, zip archives, storing results server-side.

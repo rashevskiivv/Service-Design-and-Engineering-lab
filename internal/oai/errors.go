@@ -37,6 +37,7 @@ const (
 	CodeForbidden           = "forbidden"
 	CodeNotFound            = "not_found"
 	CodeMethodNotAllowed    = "method_not_allowed"
+	CodeNotAcceptable       = "not_acceptable"
 	CodeUnknownTask         = "unknown_task"
 	CodeModelNotFound       = "model_not_found"
 	CodeKeyNotFound         = "key_not_found"

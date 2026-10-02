@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"local-generative-ai/internal/oai"
+	"local-generative-ai/internal/render"
 	"local-generative-ai/internal/tasks"
 )
 
@@ -13,9 +14,14 @@ const readyCacheFor = 2 * time.Second
 
 // chat serves POST /v1/chat/completions.
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Vary", "Accept")
 	c := s.newCall(w, r, "chat")
 	defer c.finish()
 	if !c.begin() {
+		return
+	}
+	f, ok := c.negotiate()
+	if !ok {
 		return
 	}
 	body, e := s.readBody(w, r)
@@ -29,11 +35,17 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		c.refuse(e)
 		return
 	}
-	c.run(n.Request, n.ClientWantsUsage, n.PromptBytes)
+	o := output{format: f, stream: n.Request.Stream, wantsUsage: n.ClientWantsUsage,
+		naming: render.Naming{RequestID: c.row.RequestID}}
+	if f == render.FormatReport {
+		o.report = c.chatReport(n)
+	}
+	c.run(n.Request, o, n.PromptBytes)
 }
 
 // task serves POST /v1/tasks/{task}.
 func (s *Server) task(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Vary", "Accept")
 	k, ok := tasks.ParseKind(r.PathValue("task"))
 	if !ok {
 		oai.WriteError(w, oai.NewError(http.StatusNotFound, oai.TypeNotFound, oai.CodeUnknownTask, "task",
@@ -43,6 +55,10 @@ func (s *Server) task(w http.ResponseWriter, r *http.Request) {
 	c := s.newCall(w, r, string(k))
 	defer c.finish()
 	if !c.begin() {
+		return
+	}
+	f, ok := c.negotiate()
+	if !ok {
 		return
 	}
 	body, e := s.readBody(w, r)
@@ -81,17 +97,21 @@ func (s *Server) task(w http.ResponseWriter, r *http.Request) {
 		MaxTokens:   s.tokens.Clamp(requested, d.MaxTokens, req.Stream),
 		Temperature: &temp,
 	}
-	wantsUsage := false
+	o := output{format: f, stream: req.Stream,
+		naming: render.Naming{Task: string(k), Language: req.Language, RequestID: c.row.RequestID}}
 	if req.Stream {
 		cr.StreamOptions = &oai.StreamOptions{IncludeUsage: true}
-		wantsUsage = req.StreamOptions != nil && req.StreamOptions.IncludeUsage
+		o.wantsUsage = req.StreamOptions != nil && req.StreamOptions.IncludeUsage
+	}
+	if f == render.FormatReport {
+		o.report = c.taskReport(k, req, model.Alias, model.Upstream)
 	}
 	model.Defaults.Apply(&cr)
 	promptBytes := 0
 	for _, m := range msgs {
 		promptBytes += len(*m.Content)
 	}
-	c.run(cr, wantsUsage, promptBytes)
+	c.run(cr, o, promptBytes)
 }
 
 type modelEntry struct {

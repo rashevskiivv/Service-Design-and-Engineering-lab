@@ -13,6 +13,7 @@ import (
 	"local-generative-ai/internal/limits"
 	"local-generative-ai/internal/oai"
 	"local-generative-ai/internal/relay"
+	"local-generative-ai/internal/render"
 	"local-generative-ai/internal/store"
 )
 
@@ -29,6 +30,7 @@ type call struct {
 	row        store.UsageRow
 	releaseKey func() // the per-key in-flight slot; nil until begin takes it
 	record     bool   // write a usage row: only for requests that passed validation
+	format     string // the negotiated response format, for the access log
 }
 
 // newCall starts a generation call; the caller must defer finish. The row
@@ -108,7 +110,7 @@ func (c *call) finish() {
 	info := infoFrom(c.r)
 	info.hasGeneration = true
 	info.keyID, info.endpoint, info.model, info.lang = c.row.KeyID, c.row.Endpoint, c.row.Model, c.row.Language
-	info.stream, info.status, info.errCode = c.row.Stream, c.row.Status, c.row.ErrorCode
+	info.stream, info.status, info.errCode, info.format = c.row.Stream, c.row.Status, c.row.ErrorCode, c.format
 	info.promptTok, info.complTok, info.estimated = c.row.PromptTokens, c.row.CompletionTokens, c.row.Estimated
 	if c.row.Queue != nil {
 		info.queueMS = c.row.Queue.Milliseconds()
@@ -190,10 +192,16 @@ func clientClosed() *oai.Error {
 	return oai.NewError(oai.StatusClientClosed, oai.TypeServer, "", "", "client closed request")
 }
 
-// run admits a validated request, sends it upstream and relays the answer.
-// From here on the outcome is recorded in a usage row.
-func (c *call) run(req oai.ChatRequest, clientWantsUsage bool, promptBytes int) {
+// run admits a validated request, sends it upstream and relays the answer in
+// the client's format. Every format except full streams upstream, even when
+// the client did not ask for a stream (DECISIONS D9); max_tokens keeps the
+// client's clamp. From here on the outcome is recorded in a usage row.
+func (c *call) run(req oai.ChatRequest, o output, promptBytes int) {
 	c.record = true
+	if o.format.Streams() {
+		req.Stream, req.StreamOptions = true, &oai.StreamOptions{IncludeUsage: true}
+	}
+	c.row.Stream = req.Stream
 	release, ok := c.admit()
 	if !ok {
 		return
@@ -228,13 +236,14 @@ func (c *call) run(req oai.ChatRequest, clientWantsUsage bool, promptBytes int) 
 	defer resp.Body.Close()
 
 	opts := relay.Options{
-		Start: c.start, ClientWantsUsage: clientWantsUsage, PromptBytes: promptBytes,
+		Start: c.start, PromptBytes: promptBytes,
 		IdleTimeout: s.cfg.Upstream.IdleTimeout, WriteTimeout: s.cfg.HTTP.WriteTimeout, Now: s.now,
 	}
 	var out relay.Outcome
 	if req.Stream {
-		out = relay.Stream(ctx, cancel, c.w, resp.Body, opts)
+		out = relay.Stream(ctx, cancel, c.sink(o), c.w, resp.Body, opts)
 	} else {
+		opts.Disposition = render.Disposition(o.naming.Filename(render.FormatFull))
 		out = relay.JSON(ctx, c.w, resp, opts)
 	}
 	c.row.Status, c.row.ErrorCode = out.Status, out.ErrCode

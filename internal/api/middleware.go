@@ -76,6 +76,7 @@ type reqInfo struct {
 	queueMS, ttftMS       int64 // -1 = not applicable
 	promptTok, complTok   int
 	inflight, queued      int
+	format                string // D9 response format; "" before negotiation
 	hasGeneration         bool
 }
 
@@ -145,7 +146,7 @@ func (s *Server) logRequest(r *http.Request, sw *statusWriter, info *reqInfo, st
 	if info.hasGeneration {
 		attrs = append(attrs,
 			slog.Int64("key_id", info.keyID), slog.String("endpoint", info.endpoint),
-			slog.String("model", info.model), slog.String("language", info.lang),
+			slog.String("model", info.model), slog.String("language", info.lang), slog.String("format", info.format),
 			slog.Bool("stream", info.stream), slog.Int64("queue_ms", info.queueMS),
 			slog.Int64("ttft_ms", info.ttftMS), slog.Int("prompt_tokens", info.promptTok),
 			slog.Int("completion_tokens", info.complTok), slog.Bool("usage_estimated", info.estimated),

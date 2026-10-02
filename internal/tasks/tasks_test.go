@@ -143,11 +143,6 @@ func TestPromptsPerLanguage(t *testing.T) {
 }
 
 func TestFences(t *testing.T) {
-	for in, want := range map[string]string{"x": "```", "a ``` b": "````", "``````": "```````", "`": "```"} {
-		if got := Fence(in); got != want {
-			t.Errorf("Fence(%q) = %q, want %q", in, got, want)
-		}
-	}
 	code := "print('```')\n``````\n"
 	r := decode(t, `{"language":"python","code":`+jsonString(code)+`,"error":`+jsonString("E ``` E")+`}`)
 	user := *Messages(Fix, r)[1].Content

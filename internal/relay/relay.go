@@ -1,6 +1,7 @@
-// Package relay copies an upstream chat completion to the client: SSE event by
-// event with a flush after each, or a bounded JSON body. It captures usage and
-// time-to-first-token without keeping any content.
+// Package relay copies an upstream chat completion to the client: an SSE
+// stream event by event through a Sink (OpenAI SSE, live text, or a buffer),
+// or a bounded JSON body. It captures usage and time-to-first-token without
+// keeping any content.
 package relay
 
 import (
@@ -29,13 +30,13 @@ const (
 
 // Options configures one relay.
 type Options struct {
-	Start            time.Time // request arrival; TTFT reference
-	ClientWantsUsage bool      // forward the usage-only chunk
-	PromptBytes      int       // for the fallback estimate
-	IdleTimeout      time.Duration
-	WriteTimeout     time.Duration // per client write
-	MaxEventBytes    int           // 0 → 1 MiB
-	Now              func() time.Time
+	Start         time.Time // request arrival; TTFT reference
+	PromptBytes   int       // for the fallback estimate
+	IdleTimeout   time.Duration
+	WriteTimeout  time.Duration // per client write
+	MaxEventBytes int           // 0 → 1 MiB
+	Disposition   string        // JSON only: Content-Disposition of a successful response ("" = none)
+	Now           func() time.Time
 }
 
 func (o Options) now() time.Time {
@@ -51,7 +52,7 @@ type Outcome struct {
 	ErrCode        string
 	Usage          oai.Usage
 	UsageEstimated bool
-	TTFT           time.Duration // 0 = no token seen (always 0 for JSON)
+	TTFT           time.Duration // first token received; 0 = none (always 0 for JSON)
 	Reason         string        // why an upstream response failed; for the log only, never content
 }
 
@@ -67,22 +68,32 @@ func failure(ctx context.Context) (int, string) {
 	}
 }
 
-// writer wraps the client connection: a fresh write deadline before every
+// Writer wraps the client connection: a fresh write deadline before every
 // write, a flush after, and the deadline cleared at the end. The server has
 // no global WriteTimeout (ARCHITECTURE §5.4), and net/http does not reset a
 // connection's write deadline between keep-alive requests, so a stale deadline
 // must never be left behind.
-type writer struct {
+type Writer struct {
 	w       http.ResponseWriter
 	rc      *http.ResponseController
 	timeout time.Duration
 }
 
-func newWriter(w http.ResponseWriter, o Options) *writer {
-	return &writer{w: w, rc: http.NewResponseController(w), timeout: o.WriteTimeout}
+func newWriter(w http.ResponseWriter, o Options) *Writer {
+	return &Writer{w: w, rc: http.NewResponseController(w), timeout: o.WriteTimeout}
 }
 
-func (cw *writer) write(chunks ...[]byte) error {
+// Header returns the response headers, to set before Begin.
+func (cw *Writer) Header() http.Header { return cw.w.Header() }
+
+// Begin sends the status line and headers at once.
+func (cw *Writer) Begin(status int) error {
+	cw.w.WriteHeader(status)
+	return cw.Write()
+}
+
+// Write sends the chunks under one write deadline, then flushes.
+func (cw *Writer) Write(chunks ...[]byte) error {
 	if cw.timeout > 0 {
 		// Deadlines are wall-clock times on the socket, so they use time.Now,
 		// never the injectable clock.
@@ -101,7 +112,7 @@ func (cw *writer) write(chunks ...[]byte) error {
 	return nil
 }
 
-func (cw *writer) clearDeadline() {
+func (cw *Writer) clearDeadline() {
 	_ = cw.rc.SetWriteDeadline(time.Time{})
 }
 
