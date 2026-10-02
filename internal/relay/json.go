@@ -14,7 +14,8 @@ import (
 // chat completion: a JSON object with a non-empty choices array and no error.
 // Anything else (an HTML page from a proxy, an error object sent with a 200)
 // is a 502 upstream_error with a generic message, as on the streaming path
-// (review m1). A valid body is copied verbatim as application/json. Usage
+// (review m1). A valid body is copied verbatim as application/json, named for
+// download by o.Disposition (DECISIONS D9). Usage
 // comes from the body, or is estimated from the answer length when the
 // upstream sent none.
 func JSON(ctx context.Context, w http.ResponseWriter, resp *http.Response, o Options) Outcome {
@@ -73,10 +74,13 @@ func JSON(ctx context.Context, w http.ResponseWriter, resp *http.Response, o Opt
 	out.Usage.TotalTokens = out.Usage.PromptTokens + out.Usage.CompletionTokens
 
 	w.Header().Set("Content-Type", "application/json")
+	if o.Disposition != "" {
+		w.Header().Set("Content-Disposition", o.Disposition)
+	}
 	cw := newWriter(w, o)
 	defer cw.clearDeadline()
 	w.WriteHeader(http.StatusOK)
-	if err := cw.write(body); err != nil {
+	if err := cw.Write(body); err != nil {
 		out.Status = oai.StatusClientClosed
 	}
 	return out

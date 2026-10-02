@@ -102,6 +102,61 @@ for chunk in review:
 
 Task fields: `language` (python, java, go, c, cpp), `code`, `error` (required for `fix`), `instructions` (≤ 1000 chars), `framework` (`tests` only), plus `model`, `stream`, `stream_options`, `max_tokens` and `temperature`. Unknown fields are rejected, so typos fail loudly.
 
+## Readable output and saving files
+
+The `Accept` header picks the response format, for `/v1/tasks/{task}` and `/v1/chat/completions` alike ([DECISIONS D9](docs/DECISIONS.md)). Without it, or with `*/*`, `application/json` or `text/event-stream` (what the SDK and plain curl send), responses are exactly the OpenAI JSON / SSE above.
+
+| `Accept` | Response | Download name |
+|---|---|---|
+| `text/plain` | the answer text; live chunks with `"stream":true` | `<task>-<language>-<id8>.md`, `chat-<id8>.md` |
+| `text/markdown` | a report: request, input, answer, tokens and duration | same `.md` name |
+| `text/x-code` | only the fenced code block(s), always buffered; `X-LGAI-Code-Blocks: <n>` | `fix-python-1a2b3c4d.py`, `test_1a2b3c4d.py`, `1a2b3c4d_test.go`, `<Class>.java`; no block: the whole answer as `.txt` |
+| anything else only | `406 not_acceptable` | |
+
+For these formats the gateway always streams from the model server and assembles the answer itself; `LGAI_NONSTREAM_MAX_TOKENS` still applies when you don't send `"stream":true`. Every successful response except a stream in the full format carries `Content-Disposition: attachment; filename="…"`, so `curl -OJ` saves it under that name. An error before the answer starts is the usual JSON error. A failure in the middle of a live text or report adds a final `[error: …]` line.
+
+```sh
+# Live text in the terminal
+curl -N -H 'Accept: text/plain' http://127.0.0.1:8080/v1/tasks/explain -H "Authorization: Bearer $KEY" \
+  -d '{"model":"coder","stream":true,"language":"go","code":"func F(xs []int) int { return xs[len(xs)] }"}'
+
+# Save just the fixed code: fix-python-1a2b3c4d.py
+curl -OJ -H 'Accept: text/x-code' http://127.0.0.1:8080/v1/tasks/fix -H "Authorization: Bearer $KEY" \
+  -d '{"model":"coder","language":"python","code":"print(1/0)","error":"ZeroDivisionError: division by zero"}'
+
+# Save a Markdown report of the request and the answer
+curl -OJ -H 'Accept: text/markdown' http://127.0.0.1:8080/v1/tasks/review -H "Authorization: Bearer $KEY" \
+  -d '{"model":"coder","language":"c","code":"char b[8]; strcpy(b, argv[1]);"}'
+```
+
+From Python, save under the name the server chose:
+
+```python
+import re, requests, httpx
+
+def saved_name(r):
+    return re.search(r'filename="([^"]+)"', r.headers["Content-Disposition"]).group(1)
+
+# requests: only the code
+r = requests.post("http://127.0.0.1:8080/v1/tasks/tests",
+                  headers={"Authorization": "Bearer lgai_...", "Accept": "text/x-code"},
+                  json={"model": "coder", "language": "python", "code": open("stack.py").read()})
+r.raise_for_status()
+open(saved_name(r), "w").write(r.text)          # test_1a2b3c4d.py
+
+# httpx: print the answer live, then save a report
+headers = {"Authorization": "Bearer lgai_..."}
+body = {"model": "coder", "language": "go", "code": open("main.go").read()}
+with httpx.stream("POST", "http://127.0.0.1:8080/v1/tasks/explain", timeout=300,
+                  headers={**headers, "Accept": "text/plain"}, json={**body, "stream": True}) as r:
+    for chunk in r.iter_text():
+        print(chunk, end="", flush=True)
+r = httpx.post("http://127.0.0.1:8080/v1/tasks/review", timeout=300,
+               headers={**headers, "Accept": "text/markdown"}, json=body)
+r.raise_for_status()
+open(saved_name(r), "w").write(r.text)          # review-go-1a2b3c4d.md
+```
+
 ## Admin operations
 
 The admin API is served only on `LGAI_ADMIN_ADDR` (default `127.0.0.1:8081`, reached over SSH on a server: `ssh -L 8081:127.0.0.1:8081 host`). It starts only when `LGAI_ADMIN_TOKEN` is set.

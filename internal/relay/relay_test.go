@@ -56,7 +56,7 @@ func events(body string) []string {
 func TestStreamRelaysAndFlushesPerEvent(t *testing.T) {
 	_, ctx, cancel, body := open(t, testupstream.Behaviour{})
 	rec := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
-	out := Stream(ctx, cancel, rec, body, opts())
+	out := Stream(ctx, cancel, SSE{}, rec, body, opts())
 
 	if out.Status != 200 || out.Usage != (oai.Usage{PromptTokens: 11, CompletionTokens: 2, TotalTokens: 13}) || out.UsageEstimated || out.TTFT <= 0 {
 		t.Errorf("outcome %+v", out)
@@ -88,9 +88,7 @@ func TestStreamRelaysAndFlushesPerEvent(t *testing.T) {
 func TestStreamForwardsUsageChunkWhenAsked(t *testing.T) {
 	_, ctx, cancel, body := open(t, testupstream.Behaviour{})
 	rec := httptest.NewRecorder()
-	o := opts()
-	o.ClientWantsUsage = true
-	Stream(ctx, cancel, rec, body, o)
+	Stream(ctx, cancel, SSE{WantsUsage: true}, rec, body, opts())
 	if !strings.Contains(rec.Body.String(), `"choices":[],"usage"`) {
 		t.Error("usage chunk missing")
 	}
@@ -98,7 +96,7 @@ func TestStreamForwardsUsageChunkWhenAsked(t *testing.T) {
 
 func TestStreamUsageOnEveryChunk(t *testing.T) {
 	_, ctx, cancel, body := open(t, testupstream.Behaviour{UsageAlways: true, Chunks: []string{"a", "b", "c"}})
-	out := Stream(ctx, cancel, httptest.NewRecorder(), body, opts())
+	out := Stream(ctx, cancel, SSE{}, httptest.NewRecorder(), body, opts())
 	if out.Usage.CompletionTokens != 3 || out.UsageEstimated {
 		t.Errorf("outcome %+v", out)
 	}
@@ -106,7 +104,7 @@ func TestStreamUsageOnEveryChunk(t *testing.T) {
 
 func TestStreamFallbackEstimate(t *testing.T) {
 	_, ctx, cancel, body := open(t, testupstream.Behaviour{NoUsage: true, Chunks: []string{"a", "b", "c"}})
-	out := Stream(ctx, cancel, httptest.NewRecorder(), body, opts())
+	out := Stream(ctx, cancel, SSE{}, httptest.NewRecorder(), body, opts())
 	if !out.UsageEstimated || out.Usage.CompletionTokens != 3 || out.Usage.PromptTokens != 10 {
 		t.Errorf("outcome %+v", out)
 	}
@@ -124,7 +122,7 @@ func TestStreamUpstreamErrors(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, ctx, cancel, body := open(t, tc.b)
 			rec := httptest.NewRecorder()
-			out := Stream(ctx, cancel, rec, body, opts())
+			out := Stream(ctx, cancel, SSE{}, rec, body, opts())
 			s := rec.Body.String()
 			if out.Status != http.StatusBadGateway || out.ErrCode != oai.CodeUpstreamError || out.Reason != tc.reason {
 				t.Errorf("outcome %+v", out)
@@ -141,7 +139,7 @@ func TestStreamIdleTimeout(t *testing.T) {
 	o := opts()
 	o.IdleTimeout = 100 * time.Millisecond
 	rec := httptest.NewRecorder()
-	out := Stream(ctx, cancel, rec, body, o)
+	out := Stream(ctx, cancel, SSE{}, rec, body, o)
 	if out.Status != http.StatusGatewayTimeout || out.ErrCode != oai.CodeUpstreamTimeout || out.Reason != "no data within the idle timeout" {
 		t.Errorf("outcome %+v", out)
 	}
@@ -164,7 +162,7 @@ func TestStreamTotalTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	out := Stream(ctx, cancel, httptest.NewRecorder(), resp.Body, opts())
+	out := Stream(ctx, cancel, SSE{}, httptest.NewRecorder(), resp.Body, opts())
 	if out.Status != http.StatusGatewayTimeout {
 		t.Errorf("outcome %+v", out)
 	}
@@ -174,7 +172,7 @@ func TestStreamLineTooLong(t *testing.T) {
 	_, ctx, cancel, body := open(t, testupstream.Behaviour{HugeLine: 4000})
 	o := opts()
 	o.MaxEventBytes = 1000
-	if out := Stream(ctx, cancel, httptest.NewRecorder(), body, o); out.Status != http.StatusBadGateway {
+	if out := Stream(ctx, cancel, SSE{}, httptest.NewRecorder(), body, o); out.Status != http.StatusBadGateway {
 		t.Errorf("outcome %+v", out)
 	}
 }
@@ -184,7 +182,7 @@ func TestStreamEventsSplitAcrossReads(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 	rec := httptest.NewRecorder()
-	out := Stream(ctx, cancel, rec, iotest.OneByteReader(strings.NewReader(src)), opts())
+	out := Stream(ctx, cancel, SSE{}, rec, iotest.OneByteReader(strings.NewReader(src)), opts())
 	if out.Status != 200 || out.Usage.CompletionTokens != 1 || !out.UsageEstimated {
 		t.Errorf("outcome %+v", out)
 	}
@@ -209,7 +207,7 @@ func TestStreamClientGone(t *testing.T) {
 			return
 		}
 		defer resp.Body.Close()
-		outc <- Stream(ctx, cancel, w, resp.Body, opts())
+		outc <- Stream(ctx, cancel, SSE{}, w, resp.Body, opts())
 	}))
 	defer gw.Close()
 

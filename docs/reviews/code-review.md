@@ -165,3 +165,132 @@ A restart silently turns maintenance mode off. This includes `restart: unless-st
   - Fail-fast config that reports **all** errors at once and names each variable.
 - **Tests assert behaviour, not coverage.** A fake upstream with realistic failure modes, end-to-end relay tests, a slow-reader test that proves slot release, `testing/synctest` for time-dependent gate logic, and security tests that grep logs and DB for secrets and content. They were stable across 11 race runs, including under `GOMAXPROCS=1`.
 - **Proportionate code for a 2-week project.** Small packages with clear ownership, and comments that explain *why* (deadline hygiene, cause taxonomy). DECISIONS D4 cuts were actually applied rather than half-built.
+
+---
+
+# D9 review (2026-10-01)
+
+Scope: the D9 response formats only:
+- `internal/render`
+- the `Sink` refactor in `internal/relay` (`sinks.go`, `stream.go`)
+- the wiring in `internal/api/output.go`, `generate.go` and `handlers.go`
+
+The four builder deviations in the brief are accepted by the lead, so I do not report them.
+
+**Verdict:** no critical findings, **1 major**, 4 minor, 7 nits. The refactor kept the full format intact: byte-identical in both modes. Cancel, the idle watchdog, write deadlines and usage rows work on every sink. The filename and header-injection guards hold. The real gap is that a truncated answer looks complete in every new format.
+
+## How this was verified
+
+- `go test -race -count=3 ./...` green.
+- `GOMAXPROCS=1 go test -race -count=6` on the new tests: green, no flakes.
+- `go vet` and `staticcheck` clean.
+- Unit probes of `render.Negotiate` / `CodeFile` / `Disposition` in a **copy** of the module under the scratchpad.
+- Black-box runs of the built gateway against a scripted fake upstream (exact SSE bytes, `finish_reason`, and stall / die / error / flood modes), with curl and raw sockets.
+
+| Check | Result |
+|---|---|
+| Full SSE with `include_usage` vs the upstream bytes | `cmp` identical ✔ |
+| Full SSE without `include_usage` | identical minus the usage chunk ✔ |
+| Full non-stream JSON | identical body ✔ (+ `Content-Disposition`, `Vary`) |
+| `text/plain` live, deltas 400 ms apart | one chunk per delta at 0.8 / 1.2 / 1.6 / 2.0 s ✔ |
+| Client cancel at 1 s on text / code / report | upstream cancelled, row `499`, estimated tokens ✔ |
+| Upstream stalls (idle 2 s) | text: 200 + `[error: …]` at 2.0 s. code: JSON **504**. Rows 504 ✔ |
+| Upstream dies (code format) | JSON 502, row 502 ✔ |
+| Slow reader on a live text stream (`WRITE_TIMEOUT=1s`) | gave up after 1.05 s, row 499; the next request on the same key (cap 1) got 200 ✔ |
+| 406 and text/markdown responses | `nosniff`, CSP, `no-store`, `Vary: Accept` all present; 406 is a JSON envelope; no upstream call, no row ✔ |
+| Content in `gw.log` (prompts, answers, upstream error text) | 0 hits ✔ |
+| Model answer `public class Evil"; filename="x.sh`, `Ünïcode`, `A\r\nB` | filenames `Evil.java` and `A.java`. The class regex and `Disposition()`'s ASCII allowlist both strip; injection is impossible ✔ |
+| Path traversal | every part is server-built (`id8` is hex or a hash of `../../etc`; class names allow no `.` or `/`) ✔ |
+| Answer cut at `max_tokens` (`finish_reason: length`) | ✘ D9-M1 |
+| Upstream ignoring `max_tokens` (240 MB of deltas, code format) | ✘ D9-m1: peak RSS 20 MB → **1.2 GB** |
+
+## Major
+
+### D9-M1. Truncated answers look complete in text, report and code
+
+`finish_reason` is never read. `oai.ChunkPeek` (`internal/oai/types.go`) has no such field, and `relay.Outcome` carries none. So:
+- `Live.Finish` (`internal/relay/sinks.go:98-107`) and the report footer (`render.Foot`) end a cut-off answer exactly like a finished one.
+- `render.Extract` deliberately takes an unterminated last fence "to the end" (`internal/render/fence.go:49-51`).
+
+**Reproduced** with `POST /v1/tasks/tests` (python), `Accept: text/x-code`, and an upstream answer cut mid-statement with `finish_reason: "length"`:
+- response: `200`, `X-LGAI-Code-Blocks: 1`, `filename="test_….py"`;
+- the body ends in `assert add(-1`, and `python -c 'import ast; ast.parse(...)'` fails with `SyntaxError: '(' was never closed`;
+- text and report formats: also 200, no hint; the report footer says only `Tokens: 7 prompt + 1 completion`.
+
+Yesterday the lead saw `review` truncate 5/5 answers on the small model, so this will happen on lab day. The code format exists to be "saved as a file and run", so here it hands students a broken file with every success signal.
+
+**Fix (≈25 lines):**
+1. Add `FinishReason *string` to `ChunkPeek.Choices[]` and keep the last non-null value in `streamState`. Expose it as `Outcome.FinishReason`.
+2. On `"length"`:
+   - **text:** append `\n\n[truncated: the answer reached max_tokens; ask for less or raise max_tokens]\n`;
+   - **report:** add `Finish: length (truncated)` to the footer;
+   - **code:** set `X-LGAI-Finish-Reason: length` and append one comment line in the language's syntax (`# [truncated …]` for Python, `// [truncated …]` for the others). The compiler or pytest error then points at the cause.
+3. Add one end-to-end test per format with the fake upstream sending `finish_reason: "length"`.
+
+## Minor
+
+### D9-m1. The `Buffered` sink has no byte cap
+
+`Buffered.Event` (`internal/relay/sinks.go:141-144`) appends every delta to a `strings.Builder`. The only bound is the upstream honouring `max_tokens` (the request's clamp) plus `LGAI_UPSTREAM_TIMEOUT`. The non-streaming JSON path is capped at 8 MiB; this path is not. `CodeFile` then makes further copies: `Split`, the block builders, and the `Join`.
+
+**Reproduced** with an upstream that ignores `max_tokens: 16`: an 80 MB answer took peak RSS from 20 MB to 479 MB; a 240 MB answer took it to 1.2 GB. Both returned 200, and the row recorded `completion_tokens=60000`. Ollama and vLLM do honour `max_tokens`, so this needs a buggy or misconfigured upstream. But one such request per concurrent student would OOM the gateway.
+
+**Fix:** a cap in `Buffered.Event` (1 MiB is ~100× any `LGAI_MAX_TOKENS_CAP` answer) that returns a distinct `errAnswerTooLarge`. In `flushEvent` (`internal/relay/stream.go:159`), treat that error as an upstream failure (`s.reason = "answer too large"`, **not** `gone`), so `Fail` sends a JSON 502 instead of recording a 499. Optionally count bytes for `Live` too.
+
+### D9-m2. A mid-stream failure in live formats does not close the connection
+
+`Live.Fail` (`internal/relay/sinks.go:110-112`) appends the `[error: …]` line. The handler then returns normally, so net/http sends the chunked terminator and keeps the connection alive.
+
+**Reproduced** (raw socket): `…[error: …]\n` arrives, then `0\r\n\r\n`, then the socket stays open. curl exits **0**, and `curl -fOJ … && pytest` cannot tell this from success. D9 says "append one line … then close".
+
+**Fix:** after recording the row, abort the response so the terminator is never sent; curl then exits 18 and wget retries. Two ways:
+- **Option 1:** `http.NewResponseController(w).Hijack()` + `Close()` for HTTP/1.1.
+- **Option 2:** `panic(http.ErrAbortHandler)` from `call.finish`, after `InsertUsage`. This also works behind an HTTP/2 proxy, but `accessLog` must then log in a `defer` (today it would drop the line).
+
+### D9-m3. (Decision, labelled) Code format concatenates blocks of every language into one file
+
+D9 says "concatenate all blocks", and `CodeFile` (`internal/render/filename.go:87-99`) does. Models often add a run command or a build snippet after the code. Reproduced:
+- **tests/python:** a `pytest -q` block lands at module level in `test_….py` (`NameError` at collection).
+- **tests/java:** an ```` ```xml ```` Maven `<dependency>` block lands in `CalcTest.java`, which won't compile.
+- **chat:** when the first block is ```` ```bash ```` (`pip install …`), a Python answer is saved as `.txt` / `text/plain`.
+
+**Fix:**
+- **Tasks:** keep blocks whose info string maps to the task language, or is empty. Use all blocks only if none match.
+- **Chat:** choose the language of the first block with a known language and keep that language's blocks (plus untagged ones).
+- `X-LGAI-Code-Blocks` should count the kept blocks.
+
+### D9-m4. Test gaps for the new surface
+
+The new tests are behavioural and stable:
+- byte comparison against the upstream;
+- headers per format;
+- the flush sequence in `TestLiveSink`;
+- mid-stream errors per format;
+- 406 without an upstream call or a row.
+
+Missing, all of which I reproduced by hand:
+- client cancel and the idle watchdog on `Live` and `Buffered`;
+- the write deadline with a slow reader on `Live`;
+- truncation (D9-M1);
+- the buffer cap (D9-m1);
+- Accept edge cases: `q=0` on a wildcard, case and whitespace in params, a 16 KiB header.
+
+These are cheap to add with the existing `testupstream` behaviours (`StallAfter`, `ChunkDelay`, `Chunks`).
+
+## Nits
+
+- **D9-n1. Tab-indented fences keep their tabs.** `dedent` strips only spaces, but `indent` counts tabs too (`internal/render/fence.go:56-62`). ```` \t```python ```` inside a list therefore yields `\tdef f():`, and Python raises `IndentationError`. Fix: strip the opening line's exact whitespace prefix.
+- **D9-n2. `~~~` fences are not recognised** (0 blocks → `.txt`). They are CommonMark-valid and rare from these models; D9 says backticks, so this is a docs line.
+- **D9-n3. Wildcards override a more specific `q=0`.** `Accept: text/*;q=0.5, text/plain;q=0` → full, and a non-stream full answer is `application/json`, which doesn't match `text/*` (`negotiate.go:33-37`). It is harmless (RFC 9110 allows ignoring Accept). Note it in the README rather than implementing specificity.
+- **D9-n4. The drain runs before `sink.Finish`** (`internal/relay/stream.go:71-76`). The footer, the chunked terminator and the whole `Buffered` response wait for the upstream EOF, up to 100 ms. Call `end()` first, then `drain()`.
+- **D9-n5. `Live` commits `200` at `Start`**, before the first upstream event (`sinks.go:83-92`). If the upstream fails before any token (idle during a long prompt prefill), curl gets `200` + `[error]` instead of a JSON 502/504 that `curl -f` would catch. Option: delay `Begin` and `Head` until the first non-empty text or `[DONE]`.
+- **D9-n6. Windows reserved device names pass the class allowlist.** `public class CON` → `CON.java`. With `curl -OJ` on Windows this writes to the console device. Add `CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]` (case-insensitive) to the fallback.
+- **D9-n7. Other content is dropped silently.** Tool-call-only chat answers, and reasoning-only answers (gpt-oss spending `max_tokens` on reasoning), give an empty text body or an empty `.txt` with `X-LGAI-Code-Blocks: 0`. D9-M1's finish-reason line would cover the second case.
+
+## What's good (D9)
+
+- **The `Sink` interface is the right seam.** Framing, usage, TTFT, the idle watchdog, cancel causes and failure classification stay in one place (`Stream`). The sinks only format, and the full format is byte-identical.
+- **Filenames are safe by construction:** server parts, a strict class regex, then an ASCII allowlist in `Disposition`. `id8` hashes a non-hex client request id rather than echoing it.
+- **Errors are clean.** Every error before the response starts is a JSON envelope with the right status. Buffered formats turn upstream failures into a normal 502/504, and upstream error text never reaches the client or the log.
+- **`Accept` parsing is small and lenient.** It handles q-values, case, whitespace, params, invalid q (ignored), real-world headers (browser, axios, Java `HttpURLConnection`, a 16 KiB list), and gives 406 only when nothing supported is acceptable.
+- **The new tests assert bytes and headers, not coverage, and are stable** under `-race` and `GOMAXPROCS=1`.

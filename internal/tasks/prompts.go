@@ -3,6 +3,8 @@ package tasks
 import (
 	"fmt"
 	"strings"
+
+	"local-generative-ai/internal/render"
 )
 
 // langInfo holds the per-language facts used in prompts (ARCHITECTURE §6).
@@ -72,14 +74,14 @@ var systemPrompts = func() map[Kind]map[Language]string {
 func userMessage(k Kind, r Request) string {
 	info := languages[Language(r.Language)]
 	var b strings.Builder
-	fence := Fence(r.Code)
+	fence := render.Fence(r.Code)
 	fmt.Fprintf(&b, "Code (%s):\n%s%s\n%s", info.Display, fence, info.FenceTag, r.Code)
 	if !strings.HasSuffix(r.Code, "\n") {
 		b.WriteByte('\n')
 	}
 	b.WriteString(fence + "\n")
 	if r.Error != "" {
-		ef := Fence(r.Error)
+		ef := render.Fence(r.Error)
 		b.WriteString("\nError output:\n" + ef + "text\n" + r.Error)
 		if !strings.HasSuffix(r.Error, "\n") {
 			b.WriteByte('\n')
@@ -97,19 +99,4 @@ func userMessage(k Kind, r Request) string {
 		b.WriteString("\nStudent's instructions: " + r.Instructions + "\n")
 	}
 	return b.String()
-}
-
-// Fence returns a run of backticks one longer than the longest run inside s
-// (minimum 3), so the student's text cannot close the block early.
-func Fence(s string) string {
-	longest, run := 0, 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '`' {
-			run++
-			longest = max(longest, run)
-		} else {
-			run = 0
-		}
-	}
-	return strings.Repeat("`", max(3, longest+1))
 }

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: local-generative-ai gateway
-  version: 0.2.2
+  version: 0.3.0
   summary: OpenAI-compatible API gateway in front of a self-hosted open-weights coding model.
   description: |
     **Public listener** (`LGAI_ADDR`, default `127.0.0.1:8080`; containers set `:8080`):
@@ -30,6 +30,8 @@ info:
       frame-ancestors 'none'` and `Referrer-Policy: no-referrer`. There are no CORS headers.
     * An error response to a request that carried a body closes the connection.
     * No prompt or completion content is stored or logged.
+    * The `Accept` header can ask for readable formats instead of OpenAI JSON / SSE: plain text, a
+      Markdown report, or only the code, named for download (`curl -OJ`). See the `Accept` parameter.
   license:
     name: MIT
 servers:
@@ -126,6 +128,8 @@ paths:
     post:
       tags: [ openai ]
       operationId: createChatCompletion
+      parameters:
+        - { $ref: '#/components/parameters/Accept' }
       summary: OpenAI-compatible chat completion (non-streaming or SSE streaming).
       description: |
         The key is checked, and the key's in-flight slot taken, **before** the body is read. The gateway
@@ -180,9 +184,12 @@ paths:
           description: |
             `application/json` when `stream` is false or absent. `text/event-stream` when `stream` is
             true: a sequence of `data: <ChatCompletionChunk JSON>\n\n` events ending with `data: [DONE]\n\n`.
-            Only `Content-Type` is copied from the upstream response.
+            Only `Content-Type` is copied from the upstream response. Other formats by `Accept` (D9) below.
           headers:
             X-Request-ID: { $ref: '#/components/headers/X-Request-ID' }
+            Content-Disposition: { $ref: '#/components/headers/Content-Disposition' }
+            X-LGAI-Code-Blocks: { $ref: '#/components/headers/X-LGAI-Code-Blocks' }
+            Vary: { $ref: '#/components/headers/Vary' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ChatCompletion' }
@@ -208,10 +215,20 @@ paths:
                 data: {"id":"chatcmpl-8f3a","object":"chat.completion.chunk","created":1790761167,"model":"gpt-oss:20b","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
 
                 data: [DONE]
-
+            text/plain:
+              schema: { type: string, description: 'Text format (`Accept: text/plain`): the answer text only; chunked live with `stream: true`.' }
+            text/markdown:
+              schema: { type: string, description: 'Report format (`Accept: text/markdown`): request, input (fenced), answer, then tokens and duration.' }
+            text/x-python:
+              schema: { type: string, description: 'Code format (`Accept: text/x-code`): the fenced code block(s) of the answer, joined by a blank line, always buffered. The type follows the language: also text/x-java, text/x-go, text/x-c, text/x-c++, or text/plain (unknown language, or no block: then the whole answer, `.txt`).' }
+            text/x-java: { schema: { type: string } }
+            text/x-go: { schema: { type: string } }
+            text/x-c: { schema: { type: string } }
+            text/x-c++: { schema: { type: string } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/ModelNotFound' }
+        '406': { $ref: '#/components/responses/NotAcceptable' }
         '405': { $ref: '#/components/responses/MethodNotAllowed' }
         '408': { $ref: '#/components/responses/RequestTimeout' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
@@ -247,6 +264,7 @@ paths:
         Defaults per task (clamped to `LGAI_MAX_TOKENS_CAP`, and to `LGAI_NONSTREAM_MAX_TOKENS` when
         not streaming): explain 512 tok / T=0.2, review 1024 / 0.2, tests 1024 / 0.2, fix 1024 / 0.1.
       parameters:
+        - { $ref: '#/components/parameters/Accept' }
         - name: task
           in: path
           required: true
@@ -284,9 +302,12 @@ paths:
                   error: "ZeroDivisionError: division by zero"
       responses:
         '200':
-          description: Same shapes as `/v1/chat/completions`.
+          description: Same shapes as `/v1/chat/completions`, including the formats chosen by `Accept`.
           headers:
             X-Request-ID: { $ref: '#/components/headers/X-Request-ID' }
+            Content-Disposition: { $ref: '#/components/headers/Content-Disposition' }
+            X-LGAI-Code-Blocks: { $ref: '#/components/headers/X-LGAI-Code-Blocks' }
+            Vary: { $ref: '#/components/headers/Vary' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ChatCompletion' }
@@ -294,9 +315,20 @@ paths:
               schema:
                 type: string
                 description: 'SSE stream of ChatCompletionChunk objects, terminated by `data: [DONE]`.'
+            text/plain:
+              schema: { type: string, description: 'Text format (`Accept: text/plain`): the answer text only; chunked live with `stream: true`.' }
+            text/markdown:
+              schema: { type: string, description: 'Report format (`Accept: text/markdown`): request, input (fenced), answer, then tokens and duration.' }
+            text/x-python:
+              schema: { type: string, description: 'Code format (`Accept: text/x-code`): the fenced code block(s) of the answer, joined by a blank line, always buffered. The type follows the language: also text/x-java, text/x-go, text/x-c, text/x-c++, or text/plain (unknown language, or no block: then the whole answer, `.txt`).' }
+            text/x-java: { schema: { type: string } }
+            text/x-go: { schema: { type: string } }
+            text/x-c: { schema: { type: string } }
+            text/x-c++: { schema: { type: string } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '406': { $ref: '#/components/responses/NotAcceptable' }
         '408': { $ref: '#/components/responses/RequestTimeout' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
@@ -584,6 +616,24 @@ components:
         listener does not start.
 
   parameters:
+    Accept:
+      name: Accept
+      in: header
+      required: false
+      description: |
+        Response format of `/v1/chat/completions` and `/v1/tasks/{task}` (DECISIONS D9): the supported
+        type with the highest q wins, the earliest on a tie.
+        * missing, `*/*`, `application/json`, `text/event-stream` (and `text/*`, `application/*`): **full**,
+          today's OpenAI JSON or SSE, per `stream`.
+        * `text/plain`: **text**, the answer only, live with `stream: true`.
+        * `text/markdown`: **report**, input + answer + tokens and duration, live with `stream: true`.
+        * `text/x-code`: **code**, only the fenced code block(s), always buffered.
+        * only other types: 406.
+
+        Except for full, the gateway always streams from the model server; `LGAI_NONSTREAM_MAX_TOKENS`
+        still applies without `stream: true`. (OpenAPI tools ignore a parameter named Accept; it is listed
+        for readers. The response media types are normative.)
+      schema: { type: string, examples: [ 'text/plain', 'text/markdown', 'text/x-code', 'application/json' ] }
     KeyID:
       name: id
       in: path
@@ -611,6 +661,20 @@ components:
     Retry-After:
       description: Seconds to wait before retrying (integer, at least 1).
       schema: { type: integer, minimum: 1 }
+    Content-Disposition:
+      description: |
+        `attachment; filename="<name>"` on every successful text, report and code response and on every
+        non-streaming full response, so `curl -OJ` saves it. Names use only server-controlled parts:
+        `<task>-<language>-<id8>` or `chat-<id8>` (id8 = first 8 hex characters of the request id) with
+        `.json`, `.md`, the language's extension, or `.txt`; tests code is `test_<id8>.py`,
+        `<id8>_test.go` or `<Class>.java`; Java code with a public class is `<Class>.java`.
+      schema: { type: string, examples: [ 'attachment; filename="fix-python-1a2b3c4d.py"' ] }
+    X-LGAI-Code-Blocks:
+      description: Code format only. Number of code blocks extracted; 0 means the whole answer was returned as text/plain.
+      schema: { type: integer, minimum: 0 }
+    Vary:
+      description: Always `Accept` on chat and task responses.
+      schema: { type: string, const: Accept }
     X-Should-Retry:
       description: Set to `false` on quota errors, so the `openai` client does not retry automatically.
       schema: { type: string, enum: [ 'false' ] }
@@ -763,6 +827,15 @@ components:
               value: { error: { message: 'server busy: queue wait timed out; retry later', type: server_error, code: server_overloaded, param: null } }
             maintenance:
               value: { error: { message: 'the service is in maintenance; retry later', type: server_error, code: maintenance, param: null } }
+    NotAcceptable:
+      description: The `Accept` header allows none of the supported response types (D9).
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/X-Request-ID' }
+        Vary: { $ref: '#/components/headers/Vary' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: { message: 'Accept must allow application/json, text/event-stream, text/plain, text/markdown or text/x-code', type: invalid_request_error, code: not_acceptable, param: null } }
     GatewayTimeout:
       description: The upstream sent no response headers within `LGAI_UPSTREAM_HEADER_TIMEOUT` (streaming only), or exceeded `LGAI_UPSTREAM_TIMEOUT`.
       headers:
@@ -802,6 +875,7 @@ components:
                 - forbidden
                 - not_found
                 - method_not_allowed
+                - not_acceptable
                 - unknown_task
                 - model_not_found
                 - key_not_found

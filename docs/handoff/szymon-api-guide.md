@@ -92,7 +92,7 @@ What each task returns:
 | `tests` | Unit tests in a code block |
 | `fix` | The cause and the corrected code |
 
-**curl examples (streaming)**. For readable output, drop `"stream":true` and pipe to `jq -r '.choices[0].message.content'`.
+**curl examples (streaming)**. For readable output instead of raw events, add `-H 'Accept: text/plain'` (see "Readable output and saving files" below).
 
 ```sh
 H=(-H "Authorization: Bearer $OPENAI_API_KEY" -H "Content-Type: application/json")
@@ -157,6 +157,43 @@ task("fix", "python", Path("search.py").read_text(),
 ```
 
 Other languages: any HTTP client works (same JSON, `Authorization: Bearer …`). The OpenAI client libraries for Java and Go only need a custom base URL for chat.
+
+### Readable output and saving files
+
+The `Accept` header picks the format, for tasks and chat alike. Without one (or with `application/json`, as the SDK sends) you get the usual OpenAI JSON / events.
+
+| `Accept` | You get | Saved as (`curl -OJ`) |
+|---|---|---|
+| `text/plain` | The answer text, streamed live if you send `"stream":true` | `fix-python-1a2b3c4d.md` |
+| `text/markdown` | A report: your input, the answer, tokens and time | `fix-python-1a2b3c4d.md` |
+| `text/x-code` | Only the code block(s) of the answer | `fix-python-1a2b3c4d.py`; tests: `test_….py`, `…_test.go`, `<Class>.java` |
+
+```sh
+# Read the answer live in the terminal
+curl -N -H 'Accept: text/plain' "$OPENAI_BASE_URL/tasks/explain" "${H[@]}" \
+  -d '{"stream":true,"language":"java","code":"int f(int[] a){return a[a.length];}"}'
+
+# Save only the fixed code under a server-chosen name (-O -J: use the name the server sends)
+curl -OJ -H 'Accept: text/x-code' "$OPENAI_BASE_URL/tasks/fix" "${H[@]}" \
+  -d '{"language":"python","code":"print(1/0)","error":"ZeroDivisionError: division by zero"}'
+
+# Save a full report (input + answer) for your notes
+curl -OJ -H 'Accept: text/markdown' "$OPENAI_BASE_URL/tasks/review" "${H[@]}" \
+  -d '{"language":"c","code":"char b[8]; strcpy(b, argv[1]);"}'
+```
+
+If the answer has no code block, `text/x-code` returns the whole answer as `.txt` with the header `X-LGAI-Code-Blocks: 0`. An unsupported `Accept` (e.g. `image/png`) gets `406`. In Python, `requests` or `httpx` save under the server's name:
+
+```python
+import os, re, requests
+
+r = requests.post(f"{os.environ['OPENAI_BASE_URL']}/tasks/tests",
+                  headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}", "Accept": "text/x-code"},
+                  json={"language": "python", "code": open("stack.py").read()})
+r.raise_for_status()
+name = re.search(r'filename="([^"]+)"', r.headers["Content-Disposition"]).group(1)
+open(name, "w").write(r.text)   # e.g. test_1a2b3c4d.py
+```
 
 ### 3. Limits you may hit (lab server)
 
