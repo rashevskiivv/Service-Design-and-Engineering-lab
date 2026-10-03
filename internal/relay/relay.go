@@ -54,7 +54,13 @@ type Outcome struct {
 	UsageEstimated bool
 	TTFT           time.Duration // first token received; 0 = none (always 0 for JSON)
 	Reason         string        // why an upstream response failed; for the log only, never content
+	FinishReason   string        // streams: the last finish_reason ("stop", "length", …); "" = none
+	Abort          bool          // the sink had started a response when it failed: drop the connection
 }
+
+// Truncated reports whether the answer was cut off at max_tokens (or at the
+// buffer cap, which is derived from it).
+func (o Outcome) Truncated() bool { return o.FinishReason == "length" }
 
 // failure classifies why the upstream read stopped, from the context cause.
 func failure(ctx context.Context) (int, string) {

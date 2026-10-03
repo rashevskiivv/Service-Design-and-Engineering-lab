@@ -34,6 +34,10 @@ func TestNegotiate(t *testing.T) {
 		{[]string{"image/png"}, FormatFull, false},
 		{[]string{"image/png, text/html;q=0.5"}, FormatFull, false},
 		{[]string{"text/plain;q=0"}, FormatFull, false},
+		{[]string{"*/*;q=0, text/plain"}, FormatText, true},
+		{[]string{"*/*;q=0"}, FormatFull, false},
+		{[]string{" text/markdown ; Q=0.9 ; charset=UTF-8 , text/plain ; q=0.4"}, FormatReport, true},
+		{[]string{strings.Repeat("application/x-foo;q=0.1, ", 700) + "text/x-code"}, FormatCode, true}, // ~16 KiB
 	}
 	for _, tc := range tests {
 		f, ok := Negotiate(tc.accept)
@@ -63,6 +67,8 @@ func TestExtract(t *testing.T) {
 		{"inline is not a fence", "use ```x``` here\n", nil},
 		{"crlf", "```c\r\nint a;\r\n```\r\n", []Block{{"c", "int a;\n"}}},
 		{"indented fence", "1. Step:\n   ```cpp\n   int x;\n     y;\n   ```\n", []Block{{"cpp", "int x;\n  y;\n"}}},
+		{"tab-indented fence", "-\t```python\n\t```python\n\tdef f():\n\t    return 1\n\t```\n", []Block{{"python", "def f():\n    return 1\n"}}},
+		{"tildes are not fences", "~~~python\nx\n~~~\n", nil},
 		{"empty block", "```\n```\n", []Block{{"", ""}}},
 	}
 	for _, tc := range tests {
@@ -105,10 +111,23 @@ func TestCodeOutput(t *testing.T) {
 		{"chat c++", "", "", "```c++\nint x;\n```", "chat-1a2b3c4d.cpp", "text/x-c++", "int x;\n", 1},
 		{"chat unknown", "", "", "```bash\nls\n```", "chat-1a2b3c4d.txt", "text/plain", "ls\n", 1},
 		{"chat java class", "", "", "```java\npublic abstract class Shape {}\n```", "Shape.java", "text/x-java", "public abstract class Shape {}\n", 1},
+		{"other languages dropped", "tests", "python", "```python\ndef test_a(): pass\n```\nRun:\n```bash\npytest -q\n```",
+			"test_1a2b3c4d.py", "text/x-python", "def test_a(): pass\n", 1},
+		{"aliases and untagged kept", "fix", "cpp", "```c++\nint a;\n```\n```xml\n<x/>\n```\n```\nint b;\n```",
+			"fix-cpp-1a2b3c4d.cpp", "text/x-c++", "int a;\n\nint b;\n", 2},
+		{"java tests without maven xml", "tests", "java", "```java\npublic class CalcTest {}\n```\n```xml\n<dependency/>\n```",
+			"CalcTest.java", "text/x-java", "public class CalcTest {}\n", 1},
+		{"no match: all blocks", "fix", "go", "```bash\nls\n```\n```sh\npwd\n```", "fix-go-1a2b3c4d.go", "text/x-go", "ls\n\npwd\n", 2},
+		{"chat first known language", "", "", "```bash\npip install x\n```\n```python\nimport x\n```", "chat-1a2b3c4d.py", "text/x-python", "import x\n", 1},
+		{"windows device class", "fix", "java", "```java\npublic class CON {}\n```", "fix-java-1a2b3c4d.java", "text/x-java", "public class CON {}\n", 1},
 	}
 	for _, tc := range tests {
 		out := CodeFile(tc.answer, Naming{Task: tc.task, Language: tc.lang, RequestID: id})
-		want := CodeOutput{Body: tc.body, ContentType: tc.ctype + "; charset=utf-8", Filename: tc.file, Blocks: tc.blocks}
+		want := CodeOutput{Body: tc.body, ContentType: tc.ctype + "; charset=utf-8", Filename: tc.file, Blocks: tc.blocks,
+			Language: strings.TrimPrefix(strings.TrimPrefix(tc.ctype, "text/x-"), "text/plain")}
+		if want.Language == "c++" {
+			want.Language = "cpp"
+		}
 		if out != want {
 			t.Errorf("%s:\n got %#v\nwant %#v", tc.name, out, want)
 		}
@@ -142,11 +161,23 @@ func TestReport(t *testing.T) {
 	if got := r.Head(); got != want {
 		t.Errorf("Head:\n%s\nwant:\n%s", got, want)
 	}
-	if got := Foot(11, 2, true, 1500*time.Millisecond); got != "\n---\n\nTokens: 11 prompt + 2 completion = 13 (estimated). Duration: 1.5 s.\n" {
+	if got := Foot(11, 2, true, false, 1500*time.Millisecond); got != "\n---\n\nTokens: 11 prompt + 2 completion = 13 (estimated). Duration: 1.5 s.\n" {
 		t.Errorf("Foot = %q", got)
+	}
+	if got := Foot(11, 2, false, true, time.Second); got != "\n---\n\n**⚠ truncated at max_tokens: the answer above is incomplete.**\n\nTokens: 11 prompt + 2 completion = 13. Duration: 1.0 s.\n" {
+		t.Errorf("truncated Foot = %q", got)
 	}
 	chat := Report{Title: "Chat", Endpoint: "POST /v1/chat/completions", Model: "coder", Upstream: "m"}
 	if strings.Contains(chat.Head(), "Language") {
 		t.Error("chat report shows a language")
+	}
+}
+
+func TestTruncatedNote(t *testing.T) {
+	for lang, prefix := range map[string]string{"python": "# [truncated", "java": "// [truncated", "go": "// [truncated",
+		"c": "// [truncated", "cpp": "// [truncated", "": "[truncated"} {
+		if note := TruncatedNote(lang); !strings.HasPrefix(note, prefix) || !strings.HasSuffix(note, "\n") {
+			t.Errorf("%q: %q", lang, note)
+		}
 	}
 }

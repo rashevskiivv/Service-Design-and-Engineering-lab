@@ -33,44 +33,82 @@ func (c *call) negotiate() (render.Format, bool) {
 	return f, true
 }
 
+// Buffered answers are capped at bufferBytesPerToken × max_tokens, at most
+// maxBufferBytes: far above any real answer, but bounded even when an
+// upstream ignores max_tokens (review D9-m1).
+const (
+	bufferBytesPerToken = 16
+	maxBufferBytes      = 1 << 20
+)
+
+// truncatedText ends a text answer that was cut off at max_tokens.
+const truncatedText = "\n[truncated: max_tokens reached]\n"
+
 // sink builds the relay sink that writes o's format from the upstream stream.
-func (c *call) sink(o output) relay.Sink {
+// maxTokens is the request's (clamped) max_tokens.
+func (c *call) sink(o output, maxTokens int) relay.Sink {
+	limit := min(maxTokens*bufferBytesPerToken, maxBufferBytes)
 	switch o.format {
 	case render.FormatFull:
 		return relay.SSE{WantsUsage: o.wantsUsage}
 	case render.FormatCode:
-		return &relay.Buffered{Render: func(answer string, _ relay.Outcome) relay.Response {
+		return &relay.Buffered{Limit: limit, Render: func(answer string, out relay.Outcome) relay.Response {
 			code := render.CodeFile(answer, o.naming)
-			h := http.Header{}
+			h := finishHeaders(out)
+			if out.Truncated() {
+				if !strings.HasSuffix(code.Body, "\n") {
+					code.Body += "\n"
+				}
+				code.Body += render.TruncatedNote(code.Language)
+			}
 			h.Set("Content-Disposition", render.Disposition(code.Filename))
 			h.Set("X-LGAI-Code-Blocks", strconv.Itoa(code.Blocks))
 			return relay.Response{ContentType: code.ContentType, Header: h, Body: code.Body}
 		}}
 	}
 	ctype, head := "text/plain; charset=utf-8", ""
-	var foot func(relay.Outcome) string
+	foot := func(out relay.Outcome) string {
+		if out.Truncated() {
+			return truncatedText
+		}
+		return ""
+	}
 	if o.format == render.FormatReport {
 		ctype, head = "text/markdown; charset=utf-8", o.report.Head()
 		foot = func(out relay.Outcome) string {
-			return render.Foot(out.Usage.PromptTokens, out.Usage.CompletionTokens, out.UsageEstimated, c.s.now().Sub(c.start))
+			return render.Foot(out.Usage.PromptTokens, out.Usage.CompletionTokens, out.UsageEstimated, out.Truncated(),
+				c.s.now().Sub(c.start))
 		}
 	}
 	disposition := render.Disposition(o.naming.Filename(o.format))
 	if o.stream {
 		return &relay.Live{ContentType: ctype, Disposition: disposition, Head: head, Foot: foot}
 	}
-	return &relay.Buffered{Render: func(answer string, out relay.Outcome) relay.Response {
+	return &relay.Buffered{Limit: limit, Render: func(answer string, out relay.Outcome) relay.Response {
 		body := head + answer
 		if !strings.HasSuffix(answer, "\n") {
 			body += "\n"
 		}
-		if foot != nil {
-			body += foot(out)
-		}
-		h := http.Header{}
+		body += foot(out)
+		h := finishHeaders(out)
 		h.Set("Content-Disposition", disposition)
 		return relay.Response{ContentType: ctype, Header: h, Body: body}
 	}}
+}
+
+// finishHeaders tell a script how a buffered answer ended:
+// X-LGAI-Finish-Reason always, X-LGAI-Truncated when it was cut off.
+func finishHeaders(out relay.Outcome) http.Header {
+	h := http.Header{}
+	reason := out.FinishReason
+	if reason == "" {
+		reason = "unknown"
+	}
+	h.Set("X-LGAI-Finish-Reason", reason)
+	if out.Truncated() {
+		h.Set("X-LGAI-Truncated", "true")
+	}
+	return h
 }
 
 // taskReport is the report header of a task request: its fields, fenced.

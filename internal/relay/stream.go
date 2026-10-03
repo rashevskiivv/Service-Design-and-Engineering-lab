@@ -69,11 +69,12 @@ func Stream(ctx context.Context, cancel context.CancelCauseFunc, sink Sink, w ht
 		line = bytes.TrimRight(line, "\r\n")
 		if len(line) == 0 {
 			done, ok := s.flushEvent(cancel)
-			if done {
-				drain(br, cancel)
-			}
 			if !ok || done {
-				return s.end(ctx, done)
+				out := s.end(ctx, done)
+				if done && !s.capped {
+					drain(br, cancel) // after the response is written (review D9-n4)
+				}
+				return out
 			}
 			continue
 		}
@@ -94,7 +95,9 @@ type streamState struct {
 	tokens   int // token-bearing chunks, for the fallback estimate
 	ttft     time.Duration
 	gone     bool   // a client write failed
+	capped   bool   // the sink's answer cap was reached; upstream cancelled
 	reason   string // why the upstream stream failed (log only)
+	finish   string // the last finish_reason seen
 }
 
 // addLine appends one SSE line to the pending event. Lines that are not SSE
@@ -147,6 +150,9 @@ func (s *streamState) flushEvent(cancel context.CancelCauseFunc) (done, ok bool)
 				u := *peek.Usage
 				s.usage = &u
 			}
+			if len(peek.Choices) > 0 && peek.Choices[0].FinishReason != nil && *peek.Choices[0].FinishReason != "" {
+				s.finish = *peek.Choices[0].FinishReason
+			}
 			if peek.HasToken() {
 				s.tokens++
 				if s.ttft == 0 {
@@ -157,6 +163,13 @@ func (s *streamState) flushEvent(cancel context.CancelCauseFunc) (done, ok bool)
 		}
 	}
 	if err := s.sink.Event(s.cw, ev); err != nil {
+		if errors.Is(err, errAnswerCapped) {
+			// Stop reading: the answer is as long as it may be. It ends as a
+			// truncated success, like one cut at max_tokens (review D9-m1).
+			s.capped, s.finish = true, "length"
+			cancel(errAnswerCapped)
+			return true, true
+		}
 		s.gone = true
 		cancel(ErrClientGone)
 		return false, false
@@ -185,14 +198,15 @@ func (s *streamState) end(ctx context.Context, done bool) Outcome {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		s.reason = "upstream request timeout"
 	}
+	out := s.outcome(status, code)
 	if status != oai.StatusClientClosed {
-		s.sink.Fail(s.cw, status, code)
+		out.Abort = s.sink.Fail(s.cw, status, code)
 	}
-	return s.outcome(status, code)
+	return out
 }
 
 func (s *streamState) outcome(status int, code string) Outcome {
-	out := Outcome{Status: status, ErrCode: code, TTFT: s.ttft}
+	out := Outcome{Status: status, ErrCode: code, TTFT: s.ttft, FinishReason: s.finish}
 	if status != http.StatusOK {
 		out.Reason = s.reason
 	}

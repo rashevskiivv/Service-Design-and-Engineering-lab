@@ -31,6 +31,7 @@ type call struct {
 	releaseKey func() // the per-key in-flight slot; nil until begin takes it
 	record     bool   // write a usage row: only for requests that passed validation
 	format     string // the negotiated response format, for the access log
+	abort      bool   // drop the connection after the usage row (a live response failed)
 }
 
 // newCall starts a generation call; the caller must defer finish. The row
@@ -125,6 +126,12 @@ func (c *call) finish() {
 	defer cancel()
 	if err := c.s.store.InsertUsage(ctx, c.row); err != nil {
 		c.s.log.Error("usage insert failed", "request_id", c.row.RequestID, "error", err)
+	}
+	if c.abort {
+		// A live text or report response failed after its 200: drop the
+		// connection instead of ending the response cleanly, so curl and
+		// scripts see a failure (review D9-m2). The access log still logs.
+		panic(http.ErrAbortHandler)
 	}
 }
 
@@ -241,7 +248,7 @@ func (c *call) run(req oai.ChatRequest, o output, promptBytes int) {
 	}
 	var out relay.Outcome
 	if req.Stream {
-		out = relay.Stream(ctx, cancel, c.sink(o), c.w, resp.Body, opts)
+		out = relay.Stream(ctx, cancel, c.sink(o, req.MaxTokens), c.w, resp.Body, opts)
 	} else {
 		opts.Disposition = render.Disposition(o.naming.Filename(render.FormatFull))
 		out = relay.JSON(ctx, c.w, resp, opts)
@@ -249,6 +256,7 @@ func (c *call) run(req oai.ChatRequest, o output, promptBytes int) {
 	c.row.Status, c.row.ErrorCode = out.Status, out.ErrCode
 	c.row.PromptTokens, c.row.CompletionTokens = out.Usage.PromptTokens, out.Usage.CompletionTokens
 	c.row.Estimated = out.UsageEstimated
+	c.abort = out.Abort
 	if out.TTFT > 0 {
 		c.row.TTFT = &out.TTFT
 	}

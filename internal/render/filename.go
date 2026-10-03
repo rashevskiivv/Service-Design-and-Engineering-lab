@@ -26,11 +26,16 @@ var codeTypes = map[string]string{
 	"python": "text/x-python", "java": "text/x-java", "go": "text/x-go", "c": "text/x-c", "cpp": "text/x-c++",
 }
 
-// fenceLanguages maps a fence info string to a task language (chat code).
+// fenceLanguages maps a fence info string to a task language.
 var fenceLanguages = map[string]string{
-	"python": "python", "py": "python", "java": "java", "go": "go", "golang": "go",
-	"c": "c", "cpp": "cpp", "c++": "cpp", "cc": "cpp",
+	"python": "python", "py": "python", "python3": "python", "py3": "python",
+	"java": "java", "go": "go", "golang": "go",
+	"c": "c", "cpp": "cpp", "c++": "cpp", "cc": "cpp", "cxx": "cpp", "hpp": "cpp",
 }
+
+// windowsDevices are file names Windows treats as devices whatever the
+// extension; curl -OJ there would write to the device.
+var windowsDevices = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])$`)
 
 // id8 is the first 8 hex characters of the request id. A client-supplied id
 // that does not start with hex is hashed, so the name stays hex.
@@ -77,26 +82,45 @@ type CodeOutput struct {
 	Body        string
 	ContentType string // with charset
 	Filename    string
-	Blocks      int // for X-LGAI-Code-Blocks
+	Blocks      int    // for X-LGAI-Code-Blocks: the blocks kept
+	Language    string // the file's language; "" for a .txt
 }
 
-// CodeFile extracts the fenced blocks of answer, joined by one blank line, and
-// names the file (DECISIONS D9). With no block, the whole answer is returned
-// as text/plain in a .txt file. The language is the task's, or for chat the
-// first fence's info string.
+// CodeFile extracts the fenced blocks of answer that are in the target
+// language, joined by one blank line, and names the file (DECISIONS D9). The
+// target is the task's language, or for chat the first block with a known
+// language. Untagged blocks are kept too; if no block matches, all are kept,
+// so a run command or a build snippet in another language stays out of the
+// file. With no block at all, the whole answer is returned as text/plain in a
+// .txt file.
 func CodeFile(answer string, n Naming) CodeOutput {
 	blocks := Extract(answer)
 	if len(blocks) == 0 {
 		return CodeOutput{Body: answer, ContentType: "text/plain; charset=utf-8", Filename: n.base() + ".txt"}
 	}
-	parts := make([]string, len(blocks))
-	for i, b := range blocks {
-		parts[i] = b.Code
-	}
-	out := CodeOutput{Body: strings.Join(parts, "\n"), Blocks: len(blocks)}
 	lang := n.Language
 	if lang == "" {
-		lang = fenceLanguages[blocks[0].Info]
+		for _, b := range blocks {
+			if l := fenceLanguages[b.Info]; l != "" {
+				lang = l
+				break
+			}
+		}
+	}
+	var parts []string
+	for _, b := range blocks {
+		if b.Info == "" || (lang != "" && fenceLanguages[b.Info] == lang) {
+			parts = append(parts, b.Code)
+		}
+	}
+	if len(parts) == 0 {
+		for _, b := range blocks {
+			parts = append(parts, b.Code)
+		}
+	}
+	out := CodeOutput{Body: strings.Join(parts, "\n"), Blocks: len(parts)}
+	if _, known := extensions[lang]; known {
+		out.Language = lang
 	}
 	out.ContentType = "text/plain; charset=utf-8"
 	if t, ok := codeTypes[lang]; ok {
@@ -137,8 +161,22 @@ func codeFilename(n Naming, lang, code string) string {
 // identifier.
 func javaClass(code string) string {
 	m := classPattern.FindStringSubmatch(code)
-	if m == nil || !classNameOK.MatchString(m[1]) {
+	if m == nil || !classNameOK.MatchString(m[1]) || windowsDevices.MatchString(m[1]) {
 		return ""
 	}
 	return m[1]
+}
+
+// TruncatedNote is the line appended to a code file whose answer was cut off,
+// as a comment in the file's language so the compiler or test error points at
+// the cause.
+func TruncatedNote(lang string) string {
+	const note = "[truncated: the answer reached max_tokens, so this file is incomplete]\n"
+	switch lang {
+	case "python":
+		return "# " + note
+	case "java", "go", "c", "cpp":
+		return "// " + note
+	}
+	return note
 }

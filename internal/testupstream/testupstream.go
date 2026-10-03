@@ -45,6 +45,7 @@ type Behaviour struct {
 	ChunkDelay   time.Duration // pause between chunks
 	HugeLine     int           // >0: one data line of this many bytes after the first chunk
 	DoneDelay    time.Duration // pause after data: [DONE] before the response ends
+	FinishReason string        // the final chunk's finish_reason (default "stop"), e.g. "length"
 	Body         string        // non-streaming 200 body, sent verbatim (Content-Type from Header, else JSON)
 }
 
@@ -211,7 +212,11 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, b Behaviour, bod
 			return
 		}
 	}
-	send(head + `[{"index":0,"delta":{},"finish_reason":"stop"}]}`)
+	finish := b.FinishReason
+	if finish == "" {
+		finish = "stop"
+	}
+	send(head + `[{"index":0,"delta":{},"finish_reason":"` + finish + `"}]}`)
 	so, _ := body["stream_options"].(map[string]any)
 	if iu, _ := so["include_usage"].(bool); iu && !b.NoUsage {
 		send(head + `[],"usage":` + usage(len(chunks)) + `}`)

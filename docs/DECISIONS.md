@@ -203,5 +203,6 @@ Changed 2026-10-01 after the code reviews (`reviews/code-review.md` m4, m5; `rev
   - chat code language comes from the first fence's info string (`python`, `py`, `java`, `go`, `golang`, `c`, `cpp`, `c++`, `cc`), else `.txt`;
   - any class name taken from model output must match `^[A-Za-z_][A-Za-z0-9_]{0,63}$`, else fall back. ASCII only, no quotes or slashes; `filename*=` is not needed.
 - **Fence parsing:** lines starting with three or more backticks open and close a block; the info string is the first word after the backticks; text outside fences is dropped in code format. Unterminated last fence: take until the end.
+- **Block selection** (2026-10-02, code review D9-m3): code format keeps only the blocks whose info string maps to the target language (aliases such as `py`, `golang`, `c++`, `cc`), plus untagged blocks; if none match, it keeps all. The target is the task's `language`; for chat, the first block with a known language. `X-LGAI-Code-Blocks` counts the kept blocks.
 - **Security unchanged:** same security headers (`nosniff`, CSP `default-src 'none'`, `no-store`), no CORS, no content logging. `Vary: Accept` on generation responses.
 - **Out of scope:** `?format=` query parameters (Slava chose `Accept`), HTML rendering, zip archives, storing results server-side.

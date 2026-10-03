@@ -42,12 +42,16 @@ func (r Report) Head() string {
 	return b.String()
 }
 
-// Foot renders the footer after the answer: tokens and duration.
-func Foot(prompt, completion int, estimated bool, d time.Duration) string {
-	est := ""
+// Foot renders the footer after the answer: a truncation warning when the
+// answer was cut off, then tokens and duration.
+func Foot(prompt, completion int, estimated, truncated bool, d time.Duration) string {
+	warn, est := "", ""
+	if truncated {
+		warn = "\n**⚠ truncated at max_tokens: the answer above is incomplete.**\n"
+	}
 	if estimated {
 		est = " (estimated)"
 	}
-	return fmt.Sprintf("\n---\n\nTokens: %d prompt + %d completion = %d%s. Duration: %.1f s.\n",
-		prompt, completion, prompt+completion, est, d.Seconds())
+	return fmt.Sprintf("\n---\n%s\nTokens: %d prompt + %d completion = %d%s. Duration: %.1f s.\n",
+		warn, prompt, completion, prompt+completion, est, d.Seconds())
 }

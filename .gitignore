@@ -23,3 +23,8 @@ bin/
 .idea/workspace.xml
 .idea/shelf/
 .idea
+
+# Local secrets and transfer files
+key.json
+.lgai-xfer/
+.DS_Store

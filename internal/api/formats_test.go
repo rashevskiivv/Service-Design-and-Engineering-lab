@@ -3,6 +3,7 @@ package api
 import (
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -31,6 +32,32 @@ func (e *env) format(key, accept, path, body string) (int, http.Header, string) 
 	}
 	rec := e.user(key, "POST", path, body, h...)
 	return rec.Code, rec.Header(), rec.Body.String()
+}
+
+// formatAbort is format for responses that may end by dropping the connection
+// (panic(http.ErrAbortHandler), which net/http turns into an aborted
+// response); it reports whether they did.
+func (e *env) formatAbort(key, accept, path, body string) (code int, h http.Header, got string, aborted bool) {
+	e.t.Helper()
+	r := httptest.NewRequest("POST", path, strings.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+key)
+	r.Header.Set("X-Request-ID", reqID)
+	if accept != "" {
+		r.Header.Set("Accept", accept)
+	}
+	rec := httptest.NewRecorder()
+	func() {
+		defer func() {
+			if v := recover(); v != nil {
+				if v != http.ErrAbortHandler {
+					panic(v)
+				}
+				aborted = true
+			}
+		}()
+		e.pub.ServeHTTP(rec, r)
+	}()
+	return rec.Code, rec.Header(), rec.Body.String(), aborted
 }
 
 // TestFullFormatUnchanged: without a readable Accept type, responses are
@@ -165,20 +192,23 @@ func TestMidStreamErrorPerFormat(t *testing.T) {
 	tests := []struct {
 		accept, body string
 		status       int
+		aborted      bool // live text/report drop the connection after the error line (review D9-m2)
 		check        func(h http.Header, got string) bool
 	}{
-		{"", streamBody, 200, func(_ http.Header, got string) bool { return strings.Contains(got, `"code":"upstream_error"`) }},
-		{"text/plain", streamBody, 200, func(_ http.Header, got string) bool { return got == "Hello"+errLine }},
-		{"text/markdown", streamBody, 200, func(_ http.Header, got string) bool {
+		{"", streamBody, 200, false, func(_ http.Header, got string) bool {
+			return strings.Contains(got, `"code":"upstream_error"`)
+		}},
+		{"text/plain", streamBody, 200, true, func(_ http.Header, got string) bool { return got == "Hello"+errLine }},
+		{"text/markdown", streamBody, 200, true, func(_ http.Header, got string) bool {
 			return strings.HasPrefix(got, "# Chat\n") && strings.HasSuffix(got, "## Answer\n\nHello"+errLine)
 		}},
-		{"text/plain", chatBody, 502, jsonError},
-		{"text/x-code", streamBody, 502, jsonError},
+		{"text/plain", chatBody, 502, false, jsonError},
+		{"text/x-code", streamBody, 502, false, jsonError},
 	}
 	for _, tc := range tests {
-		code, h, got := e.format(key, tc.accept, "/v1/chat/completions", tc.body)
-		if code != tc.status || !tc.check(h, got) || strings.Contains(got, "CANARY") {
-			t.Errorf("Accept %q %s: %d %v %q", tc.accept, tc.body, code, h, got)
+		code, h, got, aborted := e.formatAbort(key, tc.accept, "/v1/chat/completions", tc.body)
+		if code != tc.status || aborted != tc.aborted || !tc.check(h, got) || strings.Contains(got, "CANARY") {
+			t.Errorf("Accept %q %s: %d aborted=%v %v %q", tc.accept, tc.body, code, aborted, h, got)
 		}
 		if u := e.lastUsage(); u.Status != 502 {
 			t.Errorf("Accept %q: usage %+v", tc.accept, u)

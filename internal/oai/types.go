@@ -99,6 +99,7 @@ type ChunkPeek struct {
 			ReasoningContent *string         `json:"reasoning_content"`
 			ToolCalls        json.RawMessage `json:"tool_calls"`
 		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"` // "stop", "length", …; null until the last chunk
 	} `json:"choices"`
 	Usage  *Usage          `json:"usage"`
 	Error  json.RawMessage `json:"error"`

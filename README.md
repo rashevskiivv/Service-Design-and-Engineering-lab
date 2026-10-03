@@ -110,10 +110,14 @@ The `Accept` header picks the response format, for `/v1/tasks/{task}` and `/v1/c
 |---|---|---|
 | `text/plain` | the answer text; live chunks with `"stream":true` | `<task>-<language>-<id8>.md`, `chat-<id8>.md` |
 | `text/markdown` | a report: request, input, answer, tokens and duration | same `.md` name |
-| `text/x-code` | only the fenced code block(s), always buffered; `X-LGAI-Code-Blocks: <n>` | `fix-python-1a2b3c4d.py`, `test_1a2b3c4d.py`, `1a2b3c4d_test.go`, `<Class>.java`; no block: the whole answer as `.txt` |
+| `text/x-code` | the fenced code block(s) in the task's language (plus untagged ones; all blocks if none match), always buffered; `X-LGAI-Code-Blocks: <n>` | `fix-python-1a2b3c4d.py`, `test_1a2b3c4d.py`, `1a2b3c4d_test.go`, `<Class>.java`; no block: the whole answer as `.txt` |
 | anything else only | `406 not_acceptable` | |
 
-For these formats the gateway always streams from the model server and assembles the answer itself; `LGAI_NONSTREAM_MAX_TOKENS` still applies when you don't send `"stream":true`. Every successful response except a stream in the full format carries `Content-Disposition: attachment; filename="…"`, so `curl -OJ` saves it under that name. An error before the answer starts is the usual JSON error. A failure in the middle of a live text or report adds a final `[error: …]` line.
+For these formats the gateway always streams from the model server and assembles the answer itself; `LGAI_NONSTREAM_MAX_TOKENS` still applies when you don't send `"stream":true`. Every successful response except a stream in the full format carries `Content-Disposition: attachment; filename="…"`, so `curl -OJ` saves it under that name.
+
+- **Cut off at `max_tokens`** (`finish_reason: length`): text ends with `[truncated: max_tokens reached]`, the report footer shows `⚠ truncated at max_tokens`, and a code file ends with a comment saying it is incomplete (`# …` or `// …`) plus the header `X-LGAI-Truncated: true`. Every buffered response also carries `X-LGAI-Finish-Reason` (`stop`, `length`, `tool_calls`, …). A buffered answer is capped at 16 bytes per `max_tokens` (at most 1 MiB) and counts as truncated beyond that.
+- **Errors:** before the answer starts, the usual JSON error. If a live text or report fails midway, it adds a final `[error: …]` line and the connection is dropped, so `curl` exits non-zero.
+- **Edge cases:** only backtick fences are recognised (not `~~~`). A wildcard such as `text/*` means the full format, even next to a more specific `text/plain;q=0`.
 
 ```sh
 # Live text in the terminal
