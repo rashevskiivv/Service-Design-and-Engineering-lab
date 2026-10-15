@@ -1,5 +1,7 @@
 # Model choice: open-weights coding LLM
 
+> **Legacy (2026-10-15).** Part of the model research for the cloud plan, written before the mentor's "only local" decision on 2026-10-07. The gateway is not part of the lab; files mentioned here that no longer exist (cloud handoff and research, key scripts, `cmd/loadtest`) are at git tag `cloud-final`. Current plan: [PRD](../PRD.md). For the lab's model table see [lab-setup.md §1](../lab-setup.md#1-pick-your-model).
+
 Researcher: Cloud & model agent · **All facts checked 2026-09-30** against the linked source (`[Mx]`).
 Benchmark numbers are **vendor-reported** unless stated otherwise. Harnesses differ between vendors, so compare rows only roughly.
 Checkpoint sizes were computed from the Hugging Face file listings. Ollama sizes come from ollama.com tag pages.

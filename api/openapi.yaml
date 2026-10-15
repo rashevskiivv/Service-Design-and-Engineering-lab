@@ -414,8 +414,7 @@ paths:
       summary: Create `count` keys named name_prefix + zero-padded index; plaintext keys returned once.
       description: |
         Names are `name_prefix` followed by the index, zero-padded to at least 2 digits (or to the
-        width of `count`): `lab-01` … `lab-40`. Use seat labels, never real names. `scripts/mint-keys.sh`
-        wraps this call and writes `keys.csv` (mode 0600) plus printable slips.
+        width of `count`): `lab-01` … `lab-40`. Use seat labels, never real names.
       security:
         - adminToken: [ ]
       requestBody:

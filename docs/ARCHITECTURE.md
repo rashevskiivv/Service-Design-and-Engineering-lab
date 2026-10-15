@@ -1,5 +1,7 @@
 # Architecture: local-generative-ai gateway
 
+> **Legacy (2026-10-15).** Part of the Go gateway and the cloud plan, written before the mentor's "only local" decision on 2026-10-07. The gateway is not part of the lab; files mentioned here that no longer exist (cloud handoff and research, key scripts, `cmd/loadtest`) are at git tag `cloud-final`. Current plan: [PRD](PRD.md).
+
 > **Superseded in places by [`docs/DECISIONS.md`](DECISIONS.md) and the review fixes** ([`reviews/code-review.md`](reviews/code-review.md), [`reviews/security-code.md`](reviews/security-code.md)). Where this document disagrees with the code, the code and DECISIONS win. Concrete deltas:
 >
 > - **Admission order:** auth → maintenance → per-key rejected-request bucket (30/min, burst 10) → **per-key in-flight slot, taken before the body is read** → body read + validation → rate → quota → gate. The rate token is refunded when the gate refuses (503) or the client leaves; a quota 429 keeps it (security-code V1/V2, code-review M1). This replaces §2 steps 2–8.

@@ -1,5 +1,7 @@
 # Decisions after review (wave 2), binding for implementation
 
+> **Legacy (2026-10-15).** Part of the Go gateway and the cloud plan, written before the mentor's "only local" decision on 2026-10-07. The gateway is not part of the lab; files mentioned here that no longer exist (cloud handoff and research, key scripts, `cmd/loadtest`) are at git tag `cloud-final`. Current plan: [PRD](PRD.md).
+
 Date: 2026-09-30.
 Inputs:
 - `reviews/critic.md`

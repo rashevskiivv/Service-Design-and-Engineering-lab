@@ -13,7 +13,7 @@
 #   docker run --rm curlimages/curl -s http://host.docker.internal:11434/v1/models
 # If it fails, do NOT set OLLAMA_HOST=0.0.0.0 on shared Wi-Fi (it exposes an
 # unauthenticated Ollama to the whole network, security review #23); run the
-# gateway natively instead (README.md, section "Docker").
+# gateway natively instead (docs/gateway.md, section "Docker").
 name: local-generative-ai
 
 services:

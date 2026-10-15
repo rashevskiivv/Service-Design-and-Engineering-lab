@@ -1,5 +1,7 @@
 # ADR 0003: Task endpoints return OpenAI `chat.completion` / `chat.completion.chunk`
 
+> **Legacy (2026-10-15).** Part of the Go gateway and the cloud plan, written before the mentor's "only local" decision on 2026-10-07. The gateway is not part of the lab; files mentioned here that no longer exist (cloud handoff and research, key scripts, `cmd/loadtest`) are at git tag `cloud-final`. Current plan: [PRD](../PRD.md).
+
 - Status: Accepted, 2026-09-30
 - Deciders: Slava (owner), Architect agent
 

@@ -12,12 +12,10 @@ keys-slips*.md
 *.keys
 *.pem
 *.key
-/loadtest-results/
 
 # Build output
 bin/
 /gateway
-/loadtest
 
 # IDE: shared project settings stay tracked; per-user state does not
 .idea/workspace.xml

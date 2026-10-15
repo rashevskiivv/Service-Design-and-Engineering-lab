@@ -5,11 +5,10 @@
 .gitignore
 .dockerignore
 docs/
+lab/
 .idea/
 bin/
 gateway
-loadtest
-loadtest-results/
 **/.env
 **/.env.*
 data

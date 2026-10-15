@@ -1,5 +1,7 @@
 # Code review: gateway (independent, 2026-09-30)
 
+> **Legacy (2026-10-15).** Part of the Go gateway and the cloud plan, written before the mentor's "only local" decision on 2026-10-07. The gateway is not part of the lab; files mentioned here that no longer exist (cloud handoff and research, key scripts, `cmd/loadtest`) are at git tag `cloud-final`. Current plan: [PRD](../PRD.md).
+
 Scope: all Go code under `cmd/gateway` and `internal/`. I skimmed `scripts/` (mint/admin wrappers, `report.sql`); I did not review `cmd/loadtest` in depth.
 Spec basis: `docs/PRD.md`, `api/openapi.yaml`, `README.md`, and `docs/DECISIONS.md` (binding). Where DECISIONS or an ADR already settles something, I say so. I flag a decision itself only where I think it is wrong, and label it as such.
 
