@@ -4,7 +4,7 @@ For every student of LAB_07 (SDE, Wed 2026-12-09). Everything runs on your machi
 
 **Do steps 1–4 at home, the evening before the lab.** The model is a download of 1–20 GB, and 30 laptops downloading at once over campus Wi-Fi will not work.
 
-**Status (2026-10-15):** commands checked against the Ollama docs and on a MacBook Pro M4 Pro 24 GB with Ollama 0.40.3. The other rows of the table are not tested yet; the team fills them in before the lab (runbook §2).
+**Status (2026-10-15):** commands checked against the Ollama docs and on a MacBook Pro M4 Pro 24 GB with Ollama 0.40.3, where `qwen2.5-coder:1.5b`, `qwen2.5-coder:7b` and `qwen3.5:9b` were measured. The other rows of the table are not tested yet; the team fills them in before the lab (runbook §2).
 
 ## 0. What you need
 
@@ -32,7 +32,7 @@ Then pick your row. The **class default** is the `qwen2.5-coder` family: a codin
 |---|---|---|---|---|---|
 | **Apple Silicon** (M1–M5) | 8 GB | `qwen2.5-coder:3b` | 1.9 GB | ≈ 20–40 | `qwen3.5:2b` (2.7 GB, thinks: §4) |
 | | 16 GB | `qwen2.5-coder:7b` | 4.7 GB | ≈ 12–25 | `qwen3.5:9b` (6.6–7.6 GB, thinks), tight |
-| | 24–32 GB | `qwen2.5-coder:7b` | 4.7 GB | ≈ 30–50 | `qwen3.5:9b`: **55 measured** (M4 Pro 24 GB, thinking off) · `gpt-oss:20b` (14 GB, thinks): **49.5 measured** · `qwen2.5-coder:14b` (9.0 GB) |
+| | 24–32 GB | `qwen2.5-coder:7b` | 4.7 GB | ≈ 30–50 · **46.9 measured** (M4 Pro 24 GB) | `qwen3.5:9b`: **52.5 measured** (M4 Pro 24 GB, thinking off) · `gpt-oss:20b` (14 GB, thinks): **49.5 measured** · `qwen2.5-coder:14b` (9.0 GB) |
 | | 36 GB and more | `qwen2.5-coder:14b` | 9.0 GB | ≈ 15–45 | `qwen3-coder:30b` (19 GB, fast: only 3B active) |
 | **NVIDIA GPU** (Windows / Linux) | 4 GB VRAM | `qwen2.5-coder:3b` | 1.9 GB | ≈ 30–60 | – |
 | | 6–8 GB VRAM | `qwen2.5-coder:7b` | 4.7 GB | ≈ 30–60 | `qwen3.5:4b` (3.3–4.0 GB, thinks) |
@@ -41,7 +41,7 @@ Then pick your row. The **class default** is the `qwen2.5-coder` family: a codin
 | **CPU only** (most laptops with integrated graphics, Intel Macs) | 8 GB RAM | `qwen2.5-coder:1.5b` | 1.0 GB | ≈ 10–25 | `qwen2.5-coder:0.5b` (0.4 GB, very weak) |
 | | 16 GB RAM | `qwen2.5-coder:3b` | 1.9 GB | ≈ 6–15 | `qwen2.5-coder:7b`, ≈ 3–8 tok/s |
 | | 32 GB RAM and more | `qwen2.5-coder:7b` | 4.7 GB | ≈ 3–8 | `gpt-oss:20b` (14 GB, thinks; 3.6B active, so faster than its size suggests) |
-| **Fastest test model**, any machine | – | `qwen2.5-coder:1.5b` | 1.0 GB | **153 measured** (M4 Pro) | Fine for the setup check; weak on real code |
+| **Fastest test model**, any machine | – | `qwen2.5-coder:1.5b` | 1.0 GB | **154.6 measured** (M4 Pro) | Fine for the setup check; weak on real code |
 
 How to read it:
 

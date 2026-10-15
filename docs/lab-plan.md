@@ -47,7 +47,7 @@ The first 40 minutes are the mentor's "idea and subject, focused on the local se
 
 ## 3. Guided examples (20 min, note 6)
 
-Each example: the exact prompt on a slide, run live on the projector, students type along on their own model. Answers from a small and a bigger model are **pre-generated** in case the live run is slow.
+Each example: the exact prompt on a slide, run live on the projector, students type along on their own model. Answers from a small and a bigger model are **pre-generated** in case the live run is slow: [`lab/answers/`](../lab/answers/README.md) (`qwen2.5-coder:1.5b`, `qwen2.5-coder:7b`, `qwen3.5:9b`).
 
 ### E1. "I don't know Go" (10 min)
 
@@ -75,7 +75,13 @@ File: [`lab/code/go/words/words.go`](../lab/code/go/words/words.go) — reverses
 
 4. Run the fix (`go run words.go` on the projector).
 
-**What we saw on 2026-10-15** (M4 Pro, Ollama 0.40.3): both models gave the right fix (`j := len(words)-1`), and both explained it wrongly. `qwen2.5-coder:1.5b` blamed trailing spaces and punctuation and added an unneeded `TrimRight`. `qwen3.5:9b` (thinking off) said the crash comes "once `i` reaches 9", but it happens on the first iteration. That's the point of the slide: **the code was right, the story was wrong, and only running it tells you which part to trust.**
+**What we saw on 2026-10-15** (M4 Pro, Ollama 0.40.3; saved run in [`lab/answers/E1/`](../lab/answers/README.md)):
+
+- *Predict:* none of the three models noticed that the program panics. All "predicted" an output; `qwen2.5-coder:1.5b` even invented scrambled words.
+- *Debug, first try:* `qwen2.5-coder:1.5b` and `qwen3.5:9b` (thinking off) both gave the right fix (`j := len(words)-1`) and both explained it wrongly. The 1.5B blamed trailing spaces and punctuation and added an unneeded `TrimRight`; the 9B said the crash comes "once `i` reaches 9", but it happens on the first iteration.
+- *Debug, saved run:* `qwen2.5-coder:7b` gave the right fix with a wrong story: "an odd number of words" (there are 10), and a loop condition `i < j-1` that isn't in its own code. `qwen3.5:9b` right fix, muddled story. `qwen2.5-coder:1.5b` this time gave a wrong fix (bounds checks around `words[1]`): same model, same prompt, a different answer.
+
+That's the point of the slide: **the code was right, the story was wrong, and only running it tells you which part to trust.**
 
 ### E2. "Write a simple service" (10 min)
 
@@ -95,6 +101,14 @@ After the code, give curl commands that test both endpoints.
    - ask for the test commands too;
    - it ties the lab to the course: we just designed a REST resource with an LLM.
 
+**Does the model's service run?** Checked 2026-10-15 on the M4 Pro: answer saved as `notes.py`, started with `python3 notes.py` (Python 3.9.6), then the model's own curl commands plus one more `GET`. Answers in [`lab/answers/E2/`](../lab/answers/README.md).
+
+| Model | Runs? | What we saw |
+|---|---|---|
+| `qwen2.5-coder:1.5b` | yes, as written | `GET` → `[]`; `POST` → `201` with an `id`; `GET` lists it. No input validation |
+| `qwen2.5-coder:7b` | yes, with one line changed | It listened on **all interfaces** (`""` instead of `127.0.0.1`); we fixed that before starting it. `GET /notes` returns `{"notes": [...]}`, not a JSON list. Both curls pass. A good live point: check the answer against every constraint of the prompt |
+| `qwen3.5:9b` (thinking off) | yes, as written | All 4 curls pass; `400` for a missing `text` or invalid JSON; ids start at 0 |
+
 E2 is the base for X3 and the mini-assignment.
 
 ## 4. Example bank (note 3: "bring many examples")
@@ -112,7 +126,7 @@ Spare examples for the demo, for fast students, and for questions. Files are in 
 | B7 | Memory bug | `c/students.c` + error (use after free in `free_list`) | "Find the bug from the sanitizer output" |
 | B8 | Rule of three | `cpp/matrix.cpp` + error (double free) | "Why does it crash at exit? Fix it in modern C++" |
 | B9 | Translate | `python/gradebook.py` | "Rewrite this in Java (or Go), same behaviour" — then find that both versions crash on a student with no grades (`ZeroDivisionError`) |
-| B10 | Model size matters | `def avg(xs): return sum(xs)/len(xs)` | "Review this for bugs" on `qwen2.5-coder:1.5b` vs a 7B+ model |
+| B10 | Model size matters | `def avg(xs): return sum(xs)/len(xs)` | "Review this for bugs" on `qwen2.5-coder:1.5b` vs a 7B+ model. On 2026-10-15 all three models found the empty list ([answers](../lab/answers/README.md)), so the 1.5B's "no bugs" doesn't reproduce reliably: show it as run-to-run variance |
 | B11 | Hallucination on purpose | – | "How do I use Python's `json.parse_strict()`?" (the function doesn't exist; small models often explain it anyway) |
 | B12 | Thinking on/off | any B-item | Same prompt with `--think=true` and `--think=false` on `qwen3.5`: time vs quality |
 | B13 | The model inside your own program | – | 10-line Python script with the `openai` client that sends a file to `localhost:11434/v1` and prints a review (the cheat sheet has the base code) |

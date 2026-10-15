@@ -22,7 +22,7 @@ The cloud runbook (GPU bring-up, key slips, maintenance switch) is obsolete; it 
 
 - [ ] **Tue 27.10, mentoring session:** bring the [lab plan](lab-plan.md) (schedule, examples, ladder, mini-assignment), the hardware table, a first slide skeleton. Leave with **final roles** (worksheet item).
 - [ ] **By ~T-4w (Tue 10.11): test matrix** (§2). Every team member installs Ollama on their own machine and fills a row. Owner: TBD.
-- [ ] **By T-3w:** update the speed column of [lab-setup.md §1](lab-setup.md) with the measured numbers; drop or move rows that turned out too slow. Pre-generate the E1, E2 and B10 answers on a small and a bigger model (screenshots or text) for the projector.
+- [ ] **By T-3w:** update the speed column of [lab-setup.md §1](lab-setup.md) with the measured numbers; drop or move rows that turned out too slow. Pre-generate the E1, E2 and B10 answers on a small and a bigger model (screenshots or text) for the projector — done 2026-10-15 for three models ([`lab/answers/`](../lab/answers/README.md)); redo if a prompt changes.
 - [ ] **Tue 24.11 (T-15d), dry run:** the whole lab with a timer, every slide, example and exercise. A teammate who hasn't seen it does the mini-assignment (≤ 20 min). Test the offline kit (§3) on a clean machine. Record a backup video of E1 and E2.
 - [ ] **~Wed 02.12 (T-7d): announcement to the class** (channel TBD: Moodle or the course chat): `lab-setup.md` + `lab/cheat-sheet.md`, "do steps 1–4 at home", and a short form: OS, chip/GPU, RAM, model tag, `eval rate`, works yes/no. Check Ollama's release notes; if a new version came out, re-run the setup on one Mac and one Windows machine.
 - [ ] **Mon 07.12 (T-2d), Delivery** to Google Drive: slides, `lab-setup.md`, `lab-plan.md`, `lab/` (code + cheat sheet), the mini-assignment text, and where and which generative-AI tools we used to prepare the lab.
@@ -38,12 +38,13 @@ One row per machine; cover at least **Apple Silicon 8 or 16 GB, Windows with NVI
 
 | Who | OS | Chip / GPU | RAM / VRAM | Model tag | `eval rate` (tok/s) | First word on E1 (s) | `ollama ps` | Works for the lab? | Notes |
 |---|---|---|---|---|---|---|---|---|---|
-| Slava | macOS 15 | Apple M4 Pro | 24 GB | `qwen2.5-coder:1.5b` | 153 | – | 100% GPU | yes | 2026-10-15, Ollama 0.40.3 |
-| Slava | macOS 15 | Apple M4 Pro | 24 GB | `qwen3.5:9b` `--think=false` | 55 | – | 100% GPU | yes | 2026-10-15, MLX runner |
+| Slava | macOS 15 | Apple M4 Pro | 24 GB | `qwen2.5-coder:1.5b` | 154.6 | 0.2 | 100% GPU | yes | 2026-10-15, Ollama 0.40.3, llama.cpp runner; cold start 1.4 s |
+| Slava | macOS 15 | Apple M4 Pro | 24 GB | `qwen2.5-coder:7b` | 46.9 | 0.9 | 100% GPU | yes | 2026-10-15, llama.cpp runner, 4.7 GB loaded; cold start 2.3 s |
+| Slava | macOS 15 | Apple M4 Pro | 24 GB | `qwen3.5:9b` `--think=false` | 52.5 | 1.1 | 100% GPU | yes | 2026-10-15, MLX runner, 9.0 GB loaded; cold start 3.0 s. First run 57.6 |
 | Slava | macOS 15 | Apple M4 Pro | 24 GB | `gpt-oss:20b` | 49.5 | – | 100% GPU | yes | measured 2026-09-30 |
 | … | | | | | | | | | |
 
-Slava's rows still miss the class-default `qwen2.5-coder:7b` and the E1 timing.
+**First word on E1** = the E1 debug prompt (`words.go` + error, ~330 tokens) sent with the model already loaded and nothing cached; median of 3 runs. *Cold start* includes loading the model. Ollama caches the prompt prefix (`prompt eval cached` in `--verbose`), so a second identical prompt starts almost instantly: don't time a repeat.
 
 ## 3. Offline kit (USB sticks)
 
