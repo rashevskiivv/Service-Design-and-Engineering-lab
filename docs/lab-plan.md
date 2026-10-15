@@ -1,6 +1,6 @@
 # Lab plan: schedule, examples, exercises, mini-assignment
 
-**Draft of 2026-10-15** for the mentoring session on Tue 2026-10-27. It follows the mentor's notes from 2026-10-07 (numbered as in [PRD §11](PRD.md)). Owners per block are TBD until the team agrees on roles ([PRD §9](PRD.md)); the presentation (Giulia) and the exercises (Szymon) keep their owners from 2026-09-30, to confirm.
+**Draft of 2026-10-15** for the mentoring session on Tue 2026-10-27. It follows the mentor's notes from 2026-10-07 (listed in §7). Owners per block are TBD until the team agrees on roles; the presentation (Giulia) and the exercises (Szymon) keep their owners from 2026-09-30, to confirm.
 
 Course rules that shape it: everything fits in **2 hours**, including helping classmates; examples are **very simple**; slides are not overloaded; the practical mini-assignment takes **15–20 minutes**, ideally at the end of the lab. The teachers' theory question (~10 min, Moodle) comes on top. The room is booked 08:30–11:30, so there is buffer.
 

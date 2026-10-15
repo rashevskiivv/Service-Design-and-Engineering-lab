@@ -1,28 +1,11 @@
-# Secrets and local state never enter the repo (security review #10).
-# GitHub secret scanning does not know the lgai_ key format.
-.env
-.env.*
-!.env.*.example
-data/
-*.db
-*.db-wal
-*.db-shm
-keys*.csv
-keys-slips*.md
-*.keys
-*.pem
-*.key
-
-# Build output
-bin/
-/gateway
-
-# IDE: shared project settings stay tracked; per-user state does not
-.idea/workspace.xml
-.idea/shelf/
-.idea
-
-# Local secrets and transfer files
-key.json
-.lgai-xfer/
+# OS and editors
 .DS_Store
+.idea/
+.vscode/
+
+# Build output from running the lab programs
+*.class
+names
+students
+stack
+matrix

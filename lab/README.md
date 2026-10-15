@@ -27,6 +27,4 @@ gcc -g -Wall -fsanitize=address -o names code/c/names.c && ./names
 g++ -std=c++17 -Wall -g -o matrix code/cpp/matrix.cpp && ./matrix
 ```
 
-The Go programs live in their own module (`lab/go.mod`), so they never become part of the gateway's `go build ./...` at the repo root.
-
-These snippets were written as the load-test corpus of the old cloud plan (`cmd/loadtest/corpus/`, see git tag `cloud-final`) and moved here on 2026-10-15.
+These snippets were written as the load-test corpus of the old cloud plan (`cmd/loadtest/corpus/` on branch `archive/cloud-gateway`) and moved here on 2026-10-15.

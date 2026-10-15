@@ -38,7 +38,6 @@ More commands: [lab/cheat-sheet.md](lab/cheat-sheet.md). Problems: [lab-setup.md
 
 | Path | What |
 |---|---|
-| [docs/PRD.md](docs/PRD.md) | Goal, constraints, requirements, roles, decision log |
 | [docs/lab-setup.md](docs/lab-setup.md) | Setup guide for students, with the hardware→model table |
 | [docs/lab-plan.md](docs/lab-plan.md) | 2-hour schedule, talk outline, guided examples, example bank, exercise ladder, mini-assignment |
 | [docs/runbook-lab-day.md](docs/runbook-lab-day.md) | Countdown, test matrix, offline kit, help desk and fallbacks |
@@ -54,11 +53,8 @@ More commands: [lab/cheat-sheet.md](lab/cheat-sheet.md). Problems: [lab-setup.md
 | Mon 2026-12-07 | Delivery (Google Drive) |
 | Wed 2026-12-09 | **LAB_07**, 08:30–11:30, A109 |
 
-## Legacy: the Go gateway
+## Team and history
 
-Before the mentor's "only local" decision (2026-10-07), the plan was a shared cloud GPU behind our own API gateway. The **gateway** is a Go service with an OpenAI-compatible API, per-person keys, quotas, coding task endpoints and readable output formats. It was **dropped from the lab on 2026-10-15**. Its code stays here as a separate project and still builds and tests. Students never need it.
+Team 7: Slava (rvv), Jan Piták, Giulia Vallepulcini, Szymon Domański, Afomia. Roles are being agreed.
 
-- Docs: [docs/gateway.md](docs/gateway.md), design history in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/DECISIONS.md](docs/DECISIONS.md), [docs/adr/](docs/adr/) and [docs/reviews/](docs/reviews/).
-- Code: `cmd/gateway`, `internal/`, `api/openapi.yaml`, `Dockerfile`, `docker-compose.yml`, `.env.laptop.example`, `scripts/report.sql`.
-- Checks: `go build ./... && go vet ./... && go test ./...`
-- The cloud and server-mode material (Modal/Oracle handoff, cloud research, key scripts, `cmd/loadtest`) was deleted. The full state before the decision is at git tag **`cloud-final`**.
+Until the mentor's "only local" decision on 2026-10-07, the plan was a shared cloud GPU behind our own Go API gateway. That version (gateway code, cloud research, design docs, load tester) is kept on branch [`archive/cloud-gateway`](https://github.com/rashevskiivv/Service-Design-and-Engineering-lab/tree/archive/cloud-gateway) and tag `cloud-final`. It is not part of the lab.

@@ -1,10 +1,10 @@
 # Lab-day runbook (local only)
 
 - **Lab:** Wed 2026-12-09, 08:30–11:30, room A109. **T** = lab start; T-7d is 7 days before.
-- **Topology:** there is none. Every student runs Ollama and a model on their own laptop ([lab-setup.md](lab-setup.md)). We host nothing, hand out no keys and meter nothing (mentor notes 1 and 2, [PRD §11](PRD.md)).
-- **Plan of the 2 hours:** [lab-plan.md](lab-plan.md). Owners marked *TBD* get names when the team agrees on roles ([PRD §9](PRD.md)).
+- **Topology:** there is none. Every student runs Ollama and a model on their own laptop ([lab-setup.md](lab-setup.md)). We host nothing, hand out no keys and meter nothing (mentor notes 1 and 2, [lab-plan.md §7](lab-plan.md)).
+- **Plan of the 2 hours:** [lab-plan.md](lab-plan.md). Owners marked *TBD* get names when the team agrees on roles.
 
-The cloud runbook (GPU bring-up, key slips, maintenance switch) is obsolete; it survives at git tag `cloud-final`.
+The cloud runbook (GPU bring-up, key slips, maintenance switch) is obsolete; it is on branch `archive/cloud-gateway`.
 
 ## 0. Cheat sheet for the team
 
